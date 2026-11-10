@@ -8,7 +8,8 @@ import { SCHEMA_PATH, migrate } from "../src/db.js"
 import { materialize } from "../src/materialize.js"
 import { decay, promote, recall, remember } from "../src/notes.js"
 import { register } from "../src/projects.js"
-import { apply, formatReview, reject, review, stage } from "../src/dream.js"
+import { start } from "../src/sessions.js"
+import { apply, collect, fork, formatReview, propose, reject, review, stage, transcripts } from "../src/dream.js"
 
 const SCRATCH = path.join(import.meta.dirname, "..", ".scratch")
 
@@ -575,4 +576,187 @@ test("materialize writes a read-only projection", () => {
   assert.match(written, /prefer fd over find/)
   assert.equal(output.local, 1)
   assert.equal(output.shared, 1)
+})
+
+function fileDb(name) {
+  const dir = fs.mkdtempSync(path.join(SCRATCH, name))
+  const dbPath = path.join(dir, "memory.db")
+  const db = migrate(new DatabaseSync(dbPath))
+  return { dir, dbPath, db }
+}
+
+function sessionAt(db, id, dir, startedAt, diary = `diary for ${id}`) {
+  start(db, { id, dir })
+  db.prepare("UPDATE sessions SET started_at = ?, ended_at = ?, diary = ? WHERE id = ?")
+    .run(startedAt, startedAt, diary, id)
+}
+
+test("two subagents proposing the same fact collapse to one note", () => {
+  const { dir, db } = fileDb("collect-same-")
+  const alpha = project(db, "collect-alpha")
+  sessionAt(db, "s-a", alpha.path, "2026-11-09T01:00:00.000Z")
+  sessionAt(db, "s-b", alpha.path, "2026-11-09T02:00:00.000Z")
+
+  const forked = fork(db, { out: path.join(dir, "night.db") })
+  const copy = new DatabaseSync(forked.out)
+  propose(copy, {
+    sessionId: "s-a",
+    candidates: [
+      { op: "insert", project: alpha.slug, kind: "gotcha", body: "bin/setup needs redis running", provenance: "s-a" }
+    ]
+  })
+  propose(copy, {
+    sessionId: "s-b",
+    candidates: [
+      { op: "insert", project: alpha.slug, kind: "gotcha", body: "bin/setup needs redis running", provenance: "s-b" }
+    ]
+  })
+  copy.close()
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 0)
+
+  const collected = collect(db, forked.out)
+  assert.equal(collected.staged, 1)
+  assert.equal(collected.already, false)
+
+  const applied = apply(db, collected.runId)
+  assert.equal(applied.inserted, 1)
+  assert.equal(applied.distilled, 2)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 1)
+  assert.equal(applied.source.removed, true)
+  assert.equal(fs.existsSync(forked.out), false)
+})
+
+test("a stale candidate loses to a newer version", () => {
+  const { dir, db } = fileDb("collect-stale-")
+  const alpha = project(db, "collect-stale-alpha")
+  sessionAt(db, "s-old", alpha.path, "2026-11-09T01:00:00.000Z")
+  sessionAt(db, "s-new", alpha.path, "2026-11-09T03:00:00.000Z")
+  const note = remember(db, {
+    projectId: alpha.id,
+    kind: "gotcha",
+    body: "redis listens on 6379",
+    provenance: "s-old"
+  })
+
+  const forked = fork(db, { out: path.join(dir, "night.db") })
+  const copy = new DatabaseSync(forked.out)
+  propose(copy, {
+    sessionId: "s-old",
+    candidates: [
+      { op: "update", target_id: note.id, body: "redis listens on 6380", provenance: "s-old" }
+    ]
+  })
+  propose(copy, {
+    sessionId: "s-new",
+    candidates: [
+      { op: "update", target_id: note.id, body: "redis listens on 6381", provenance: "s-new" }
+    ]
+  })
+  copy.close()
+
+  const collected = collect(db, forked.out)
+  assert.equal(collected.staged, 1)
+  assert.equal(collected.superseded, 1)
+  assert.equal(collected.superseded_rows[0].session, "s-old")
+
+  const applied = apply(db, collected.runId)
+  assert.equal(applied.updated, 1)
+  assert.equal(db.prepare("SELECT body FROM notes WHERE id = ?").get(note.id).body, "redis listens on 6381")
+})
+
+test("a candidate cannot overwrite a note version that moved on after the fork", () => {
+  const { dir, db } = fileDb("collect-version-")
+  const alpha = project(db, "collect-version-alpha")
+  sessionAt(db, "s-a", alpha.path, "2026-11-09T01:00:00.000Z")
+  const note = remember(db, {
+    projectId: alpha.id,
+    kind: "gotcha",
+    body: "redis listens on 6379",
+    provenance: "s-a"
+  })
+
+  const forked = fork(db, { out: path.join(dir, "night.db") })
+  const copy = new DatabaseSync(forked.out)
+  propose(copy, {
+    sessionId: "s-a",
+    candidates: [
+      { op: "update", target_id: note.id, body: "redis listens on 6380", provenance: "s-a" }
+    ]
+  })
+  copy.close()
+
+  db.prepare("UPDATE notes SET version = version + 1 WHERE id = ?").run(note.id)
+
+  const collected = collect(db, forked.out)
+  const applied = apply(db, collected.runId)
+
+  assert.equal(applied.updated, 0)
+  assert.equal(applied.problems.length, 1)
+  assert.match(applied.problems[0].error, /stale candidate/)
+  assert.equal(db.prepare("SELECT body FROM notes WHERE id = ?").get(note.id).body, "redis listens on 6379")
+})
+
+test("collect run twice against the same copy stages the same run", () => {
+  const { dir, db } = fileDb("collect-twice-")
+  const alpha = project(db, "collect-twice-alpha")
+  sessionAt(db, "s-a", alpha.path, "2026-11-09T01:00:00.000Z")
+
+  const forked = fork(db, { out: path.join(dir, "night.db") })
+  const copy = new DatabaseSync(forked.out)
+  propose(copy, {
+    sessionId: "s-a",
+    candidates: [
+      { op: "insert", project: alpha.slug, kind: "fact", body: "rake db:prepare owns the schema", provenance: "s-a" }
+    ]
+  })
+  copy.close()
+
+  const first = collect(db, forked.out)
+  const second = collect(db, forked.out)
+
+  assert.equal(second.already, true)
+  assert.equal(second.runId, first.runId)
+  assert.equal(second.staged, first.staged)
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM dream_runs WHERE source_fork IS NOT NULL").get().n,
+    1
+  )
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM staged WHERE run_id = ?").get(first.runId).n, 1)
+})
+
+test("collect skips candidates it cannot attribute to a session", () => {
+  const { dir, db } = fileDb("collect-unattributed-")
+  project(db, "collect-unattributed-alpha")
+
+  const forked = fork(db, { out: path.join(dir, "night.db") })
+  const copy = new DatabaseSync(forked.out)
+  stage(copy, {
+    since: null,
+    candidates: [
+      { op: "insert", scope: "global", kind: "fact", body: "floating claim with no session", provenance: "unknown" }
+    ]
+  })
+  copy.close()
+
+  const collected = collect(db, forked.out)
+  assert.equal(collected.staged, 0)
+  assert.equal(collected.skipped, 1)
+  assert.equal(collected.skipped_rows[0].reason, "no session attribution")
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 0)
+})
+
+test("transcripts writes one file per undistilled session", () => {
+  const { dir, db } = fileDb("transcripts-")
+  const alpha = project(db, "transcripts-alpha")
+  sessionAt(db, "s-a", alpha.path, "2026-11-09T01:00:00.000Z", "redis was down")
+  sessionAt(db, "s-b", alpha.path, "2026-11-09T02:00:00.000Z", "sqlite locked")
+
+  const listing = transcripts(db, { dir: path.join(dir, "transcripts"), since: "2026-11-09T00:00:00.000Z" })
+  assert.equal(listing.transcripts.length, 2)
+
+  const first = JSON.parse(fs.readFileSync(listing.transcripts[0].path, "utf8"))
+  assert.equal(first.session_id, "s-a")
+  assert.match(first.diary, /redis was down/)
+  assert.ok(Array.isArray(first.notes))
+  assert.ok(first.candidate_schema.session)
 })

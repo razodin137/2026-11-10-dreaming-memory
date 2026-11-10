@@ -1,7 +1,10 @@
-import { fingerprint, now, transaction } from "./db.js"
+import fs from "node:fs"
+import path from "node:path"
+import { randomUUID } from "node:crypto"
+import { fingerprint, now, open, transaction } from "./db.js"
 import { KINDS, SCOPES, recordRevision, remember } from "./notes.js"
 import { bySlug } from "./projects.js"
-import { undistilled } from "./sessions.js"
+import { markDistilled, undistilled } from "./sessions.js"
 
 export const CANDIDATE_SCHEMA = {
   op: "insert | merge | update | retire",
@@ -11,6 +14,7 @@ export const CANDIDATE_SCHEMA = {
   body: "checkable claim: a path, command, version, or specific gotcha",
   confidence: "0..1",
   provenance: "session id or file:line that this came from",
+  session: "id of the session this candidate came from (required for dream collect)",
   target_id: "note id, required for update and retire",
   reason: "why this candidate exists",
   examples: "array of { session, excerpt } showing the pattern",
@@ -35,12 +39,7 @@ export function packet(db, { projectId = null, since, limit = 40 } = {}) {
   }
   for (const group of groups.values()) {
     const project = group.slug === "unscoped" ? null : bySlug(db, group.slug)
-    group.notes = db.prepare(`
-      SELECT id, kind, body, confidence, hits FROM notes
-      WHERE retired_at IS NULL AND (scope = 'global' OR project_id = ?)
-      ORDER BY confidence DESC, updated_at DESC
-      LIMIT ?
-    `).all(project ? project.id : -1, limit).map((note) => ({ ...note }))
+    group.notes = existingNotes(db, project ? project.id : -1, limit)
   }
   return {
     generated_at: now(),
@@ -52,6 +51,7 @@ export function packet(db, { projectId = null, since, limit = 40 } = {}) {
       "Reject anything that only restates what the code already makes obvious.",
       "Set scope=global only for claims that hold across repositories.",
       "Cite the session id or file:line in provenance.",
+      "Set session to the id of the session each candidate came from so collect can attribute it.",
       "For every candidate, list examples ({ session, excerpt }) and state its prevalence, e.g. \"7 of 23 sessions\"."
     ],
     candidate_schema: CANDIDATE_SCHEMA,
@@ -60,17 +60,19 @@ export function packet(db, { projectId = null, since, limit = 40 } = {}) {
   }
 }
 
-export function stage(db, { candidates, since }) {
-  const run = db.prepare("INSERT INTO dream_runs (started_at) VALUES (?)").run(now())
-  const runId = Number(run.lastInsertRowid)
-  const insert = db.prepare(`
-    INSERT INTO staged (run_id, op, project_slug, scope, kind, body, confidence, provenance, target_id, reason, examples, prevalence)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `)
+export function stage(db, { candidates, since, sessionId = null, sourceFork = null, sourcePath = null }) {
   const problems = [ ]
   let stagedCount = 0
+  let runId = null
 
   transaction(db, () => {
+    runId = Number(db.prepare(
+      "INSERT INTO dream_runs (started_at, source_fork, source_path) VALUES (?, ?, ?)"
+    ).run(now(), sourceFork, sourcePath).lastInsertRowid)
+    const insert = db.prepare(`
+      INSERT INTO staged (run_id, op, project_slug, scope, kind, body, confidence, provenance, target_id, target_version, reason, examples, prevalence, session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
     for (const [ index, candidate ] of candidates.entries()) {
       const error = validate(candidate)
       if (error) {
@@ -87,15 +89,293 @@ export function stage(db, { candidates, since }) {
         clamp(candidate.confidence ?? 0.5),
         candidate.provenance || "",
         candidate.target_id || null,
+        candidate.target_version ?? null,
         candidate.reason || null,
         encodeExamples(candidate.examples),
-        candidate.prevalence ? String(candidate.prevalence) : null
+        candidate.prevalence ? String(candidate.prevalence) : null,
+        candidate.session_id || candidate.session || sessionId || null
       )
       stagedCount += 1
+      const owners = candidate.sessions || [ candidate.session_id || candidate.session || sessionId ]
+      for (const owner of owners) {
+        if (!owner) continue
+        db.prepare("INSERT OR IGNORE INTO run_sessions (run_id, session_id) VALUES (?, ?)").run(runId, owner)
+      }
     }
   })
 
   return { runId, staged: stagedCount, problems, since }
+}
+
+export function fork(db, { out = null } = {}) {
+  const target = path.resolve(out || process.env.MEM_OUT || defaultForkPath())
+  const live = db.prepare("PRAGMA database_list").all().find((entry) => entry.name === "main")
+  if (live && live.file && path.resolve(live.file) === target) {
+    throw new Error("refusing to fork over the live store")
+  }
+  for (const suffix of [ "", "-wal", "-shm" ]) {
+    fs.rmSync(`${target}${suffix}`, { force: true })
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  db.exec(`VACUUM INTO ${quote(target)}`)
+
+  const copy = open(target)
+  const forkId = randomUUID()
+  try {
+    transaction(copy, () => {
+      const put = copy.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
+      put.run("fork_id", forkId)
+      put.run("forked_at", now())
+    })
+  } finally {
+    copy.close()
+  }
+
+  return { out: target, forkId, bytes: fs.statSync(target).size }
+}
+
+export function transcripts(db, { dir = null, since = null, projectId = null, limit = 40 } = {}) {
+  const target = path.resolve(dir || path.join(process.cwd(), ".scratch", "dream", "transcripts"))
+  fs.mkdirSync(target, { recursive: true })
+  const written = [ ]
+
+  for (const session of undistilled(db, { since })) {
+    if (projectId !== null && session.project_id !== projectId) continue
+    const project = session.project_slug ? bySlug(db, session.project_slug) : null
+    const transcript = {
+      generated_at: now(),
+      session_id: session.id,
+      session: {
+        id: session.id,
+        started_at: session.started_at,
+        ended_at: session.ended_at,
+        project: session.project_slug || null,
+        path: session.project_path || null
+      },
+      instructions: [
+        "Synthesize this one session into durable memory notes.",
+        "Prefer merging into an existing note over adding a near-duplicate.",
+        "Every body must be checkable: a path, a command, a version, or a specific gotcha.",
+        "Reject anything that only restates what the code already makes obvious.",
+        "Set scope=global only for claims that hold across repositories.",
+        "Set session to this session id so collect can attribute every candidate."
+      ],
+      candidate_schema: CANDIDATE_SCHEMA,
+      diary: session.diary,
+      notes: existingNotes(db, project ? project.id : -1, limit)
+    }
+    const file = path.join(target, `${safeName(session.id)}.json`)
+    fs.writeFileSync(file, `${JSON.stringify(transcript, null, 2)}\n`)
+    written.push({ session: session.id, project: session.project_slug || null, path: file })
+  }
+
+  return { dir: target, transcripts: written }
+}
+
+export function propose(db, { sessionId = null, candidates }) {
+  if (sessionId && !db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(sessionId)) {
+    throw new Error(`unknown session: ${sessionId}`)
+  }
+  const attributed = candidates.map((candidate) => {
+    const prepared = {
+      ...candidate,
+      session_id: candidate.session_id || candidate.session || sessionId || null
+    }
+    if ((candidate.op === "update" || candidate.op === "retire") && candidate.target_id) {
+      const note = db.prepare("SELECT version FROM notes WHERE id = ?").get(candidate.target_id)
+      prepared.target_version = candidate.target_version ?? (note ? note.version : null)
+    }
+    return prepared
+  })
+  return stage(db, { candidates: attributed, since: null, sessionId })
+}
+
+export function collect(db, sourcePath) {
+  if (!sourcePath || sourcePath === true) throw new Error("missing MEM_OUT path")
+  const source = path.resolve(sourcePath)
+  if (!fs.existsSync(source)) throw new Error(`dream copy not found: ${source}`)
+
+  const copy = open(source)
+  try {
+    const forkId = readMeta(copy, "fork_id") || `manual:${source}`
+    const existing = db.prepare("SELECT id FROM dream_runs WHERE source_fork = ?").get(forkId)
+    if (existing) {
+      return {
+        runId: Number(existing.id),
+        staged: countRun(db, existing.id),
+        already: true,
+        skipped: 0,
+        superseded: 0
+      }
+    }
+
+    const rows = copy.prepare(`
+      SELECT staged.*, sessions.started_at AS session_started_at
+      FROM staged LEFT JOIN sessions ON sessions.id = staged.session_id
+      ORDER BY sessions.started_at ASC, staged.id ASC
+    `).all()
+    const reduced = reduceStaged(rows)
+    const staged = stage(db, {
+      candidates: reduced.proposals,
+      since: null,
+      sourceFork: forkId,
+      sourcePath: source
+    })
+
+    return {
+      ...staged,
+      already: false,
+      skipped: reduced.skipped.length,
+      superseded: reduced.superseded.length,
+      skipped_rows: reduced.skipped,
+      superseded_rows: reduced.superseded
+    }
+  } finally {
+    copy.close()
+  }
+}
+
+function reduceStaged(rows) {
+  const byFact = new Map()
+  const byTarget = new Map()
+  const proposals = [ ]
+  const skipped = [ ]
+  const superseded = [ ]
+
+  for (const row of rows) {
+    if (!row.session_id || !row.session_started_at) {
+      skipped.push({ staged_id: row.id, session: row.session_id || null, reason: "no session attribution" })
+      continue
+    }
+    if ((row.op === "update" || row.op === "retire") && !row.target_id) {
+      skipped.push({ staged_id: row.id, session: row.session_id, reason: `${row.op} has no target_id` })
+      continue
+    }
+
+    const candidate = {
+      op: row.op,
+      project: row.project_slug || null,
+      scope: row.scope,
+      kind: row.kind,
+      body: row.body,
+      confidence: Number(row.confidence),
+      provenance: row.provenance || null,
+      target_id: row.target_id || null,
+      target_version: row.target_version ?? null,
+      reason: row.reason || null,
+      examples: decodeExamples(row.examples),
+      prevalence: row.prevalence || null,
+      session: row.session_id,
+      sessions: [ row.session_id ],
+      staged_id: row.id
+    }
+
+    if (row.op === "update" || row.op === "retire") {
+      const prior = byTarget.get(row.target_id)
+      if (prior) {
+        superseded.push({
+          staged_id: prior.staged_id,
+          session: prior.session,
+          target_id: row.target_id,
+          superseded_by: row.session_id
+        })
+        proposals[proposals.indexOf(prior)] = candidate
+      } else {
+        proposals.push(candidate)
+      }
+      byTarget.set(row.target_id, candidate)
+      continue
+    }
+
+    const key = `${row.scope}|${row.project_slug || ""}|${row.kind}|${fingerprint(row.body)}`
+    const prior = byFact.get(key)
+    if (prior) mergeCandidate(prior, candidate)
+    else {
+      proposals.push(candidate)
+      byFact.set(key, candidate)
+    }
+  }
+
+  return { proposals, skipped, superseded }
+}
+
+function mergeCandidate(into, from) {
+  into.body = from.body
+  into.confidence = Math.max(into.confidence, from.confidence)
+  into.provenance = mergeText(into.provenance, from.provenance)
+  into.examples = mergeExamples(into.examples, from.examples)
+  into.prevalence = from.prevalence || into.prevalence
+  into.reason = from.reason || into.reason
+  into.session = from.session
+  into.sessions = Array.from(new Set([ ...into.sessions, ...from.sessions ]))
+}
+
+export function cleanupFork(db, runId) {
+  const run = db.prepare("SELECT source_path FROM dream_runs WHERE id = ?").get(runId)
+  if (!run || !run.source_path) return null
+
+  let removed = false
+  for (const suffix of [ "", "-wal", "-shm" ]) {
+    const file = `${run.source_path}${suffix}`
+    if (!fs.existsSync(file)) continue
+    fs.rmSync(file, { force: true })
+    if (suffix === "") removed = true
+  }
+  return { path: run.source_path, removed }
+}
+
+function existingNotes(db, projectId, limit = 40) {
+  return db.prepare(`
+    SELECT id, kind, body, confidence, hits FROM notes
+    WHERE retired_at IS NULL AND (scope = 'global' OR project_id = ?)
+    ORDER BY confidence DESC, updated_at DESC
+    LIMIT ?
+  `).all(projectId, limit).map((note) => ({ ...note }))
+}
+
+function defaultForkPath() {
+  const stamp = now().replace(/[:.]/g, "-")
+  return path.join(process.cwd(), ".scratch", `dream-${stamp}.db`)
+}
+
+function safeName(value) {
+  return String(value).replace(/[^a-zA-Z0-9._-]+/g, "_")
+}
+
+function quote(value) {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+function readMeta(db, key) {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key)
+  return row ? row.value : null
+}
+
+function countRun(db, runId) {
+  return db.prepare("SELECT COUNT(*) AS n FROM staged WHERE run_id = ?").get(runId).n
+}
+
+function mergeText(existing, incoming) {
+  if (!incoming) return existing || null
+  if (!existing) return incoming
+  const known = new Set(existing.split(" | "))
+  known.add(incoming)
+  return Array.from(known).join(" | ")
+}
+
+function mergeExamples(existing, incoming) {
+  const merged = new Map()
+  for (const example of [ ...exampleList(existing), ...exampleList(incoming) ]) {
+    merged.set(JSON.stringify(example), example)
+  }
+  const values = Array.from(merged.values())
+  return values.length > 0 ? values : null
+}
+
+function exampleList(value) {
+  if (!value) return [ ]
+  if (Array.isArray(value)) return value
+  return [ value ]
 }
 
 export function review(db, runId) {
@@ -289,11 +569,17 @@ export function apply(db, runId) {
     )
   })
 
+  const sessionIds = db.prepare(
+    "SELECT session_id FROM run_sessions WHERE run_id = ?"
+  ).all(runId).map((row) => row.session_id)
+
   return {
     runId,
     ...counts,
     applied: rows.length - problems.length,
     pending: pendingCount(db, runId),
+    distilled: markDistilled(db, sessionIds),
+    source: cleanupFork(db, runId),
     problems
   }
 }
@@ -304,14 +590,16 @@ export function reject(db, runId) {
     "SELECT COUNT(*) AS n FROM staged WHERE run_id = ? AND applied_at IS NOT NULL"
   ).get(runId).n
 
-  if (run.rejected_at) return { runId, rejected: true, already: true, applied }
+  if (run.rejected_at) {
+    return { runId, rejected: true, already: true, applied, source: cleanupFork(db, runId) }
+  }
   if (applied > 0) {
     throw new Error(`dream run ${runId} has ${applied} applied proposal${applied === 1 ? "" : "s"}; cannot reject`)
   }
 
   const stamp = now()
   db.prepare("UPDATE dream_runs SET rejected_at = ?, finished_at = ? WHERE id = ?").run(stamp, stamp, runId)
-  return { runId, rejected: true, applied: 0, rejected_at: stamp }
+  return { runId, rejected: true, applied: 0, rejected_at: stamp, source: cleanupFork(db, runId) }
 }
 
 function pendingCount(db, runId) {
@@ -345,6 +633,9 @@ function applyOne(db, row, counts, runId) {
     if (!row.target_id) throw new Error("update requires target_id")
     const existing = db.prepare("SELECT * FROM notes WHERE id = ?").get(row.target_id)
     if (!existing) throw new Error(`update target ${row.target_id} not found`)
+    if (row.target_version !== null && row.target_version !== undefined && existing.version > row.target_version) {
+      throw new Error(`stale candidate: note ${row.target_id} is at version ${existing.version}, candidate saw ${row.target_version}`)
+    }
     const body = row.body.trim()
     if (existing.body !== body) recordRevision(db, existing, { runId, cause: "update" })
     db.prepare(`
@@ -356,8 +647,12 @@ function applyOne(db, row, counts, runId) {
   }
   if (row.op === "retire") {
     if (!row.target_id) throw new Error("retire requires target_id")
-    const result = db.prepare("UPDATE notes SET retired_at = ? WHERE id = ?").run(now(), row.target_id)
-    if (Number(result.changes) === 0) throw new Error(`retire target ${row.target_id} not found`)
+    const existing = db.prepare("SELECT * FROM notes WHERE id = ?").get(row.target_id)
+    if (!existing) throw new Error(`retire target ${row.target_id} not found`)
+    if (row.target_version !== null && row.target_version !== undefined && existing.version > row.target_version) {
+      throw new Error(`stale candidate: note ${row.target_id} is at version ${existing.version}, candidate saw ${row.target_version}`)
+    }
+    db.prepare("UPDATE notes SET retired_at = ? WHERE id = ?").run(now(), row.target_id)
     counts.retired += 1
     return
   }

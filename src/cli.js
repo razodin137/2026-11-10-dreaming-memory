@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { DEFAULT_DB, init } from "./db.js"
-import { packet, stage, apply, formatReview, reject, review } from "./dream.js"
+import { packet, stage, apply, formatReview, reject, review, fork, transcripts, propose, collect } from "./dream.js"
 import { materialize } from "./materialize.js"
 import { KINDS, SCOPES, decay, promote, recall, remember, revisions, stats } from "./notes.js"
 import { archiveStale, byPath, list, register } from "./projects.js"
@@ -73,6 +73,23 @@ export function run(argv) {
     }
 
     case "dream": {
+      if (rest[0] === "fork") {
+        const result = fork(db, { out: flags.out || rest[1] || null })
+        if (flags.path) {
+          process.stdout.write(`${result.out}\n`)
+          return result
+        }
+        return print(result)
+      }
+      if (rest[0] === "transcripts") {
+        return print(transcripts(db, { dir: flags.dir || null, since: flags.since || null }))
+      }
+      if (rest[0] === "propose") {
+        return print(propose(db, { sessionId: flags.session || null, candidates: readCandidates(rest[1]) }))
+      }
+      if (rest[0] === "collect") {
+        return print(collect(db, rest[1] || flags.out))
+      }
       if (rest[0] === "stage") {
         return print(stage(db, { candidates: readCandidates(rest[1]), since: flags.since || null }))
       }
@@ -106,7 +123,7 @@ export function run(argv) {
         const archived = archiveStale(db, flags.archiveDays ? Number(flags.archiveDays) : 30)
         return print({ ...promotion, ...pruning, archived })
       }
-      throw new Error("usage: mem dream --packet | stage FILE | review RUN | apply RUN | reject RUN | --apply FILE | --auto")
+      throw new Error("usage: mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | review RUN | apply RUN | reject RUN | --apply FILE | --auto")
     }
 
     case "promote":
@@ -168,7 +185,9 @@ function textArg(flags, rest) {
 }
 
 function readCandidates(source) {
-  const parsed = JSON.parse(readText(require(source, "candidates FILE")))
+  const text = source === undefined || source === true ? readStdin() : readText(source)
+  if (!text) throw new Error("no candidates given (pass a FILE or pipe JSON on stdin)")
+  const parsed = JSON.parse(text)
   const candidates = Array.isArray(parsed) ? parsed : parsed.candidates
   if (!Array.isArray(candidates)) {
     throw new Error("candidates must be a JSON array or an object with a candidates array")
@@ -203,7 +222,7 @@ function usage() {
     "mem session start|end|diary [--id ID] [--diary FILE]",
     "mem remember --body TEXT [--kind gotcha] [--scope project] [--confidence 0.6]",
     "mem recall [--query TEXT] [--limit 12]",
-    "mem dream --packet | stage FILE | review RUN [--json] | apply RUN | reject RUN | --apply FILE | --auto",
+    "mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | review RUN [--json] | apply RUN | reject RUN | --apply FILE | --auto",
     "mem revisions [--note ID] [--run RUN] [--limit 50]",
     "mem promote | decay | materialize | stats"
   ].join("\n")

@@ -58,7 +58,9 @@ CREATE TABLE IF NOT EXISTS dream_runs (
   merged INTEGER NOT NULL DEFAULT 0,
   retired INTEGER NOT NULL DEFAULT 0,
   promoted INTEGER NOT NULL DEFAULT 0,
-  summary TEXT
+  summary TEXT,
+  source_fork TEXT,
+  source_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS staged (
@@ -72,13 +74,21 @@ CREATE TABLE IF NOT EXISTS staged (
   confidence REAL NOT NULL DEFAULT 0.5,
   provenance TEXT NOT NULL DEFAULT '',
   target_id INTEGER,
+  target_version INTEGER,
   reason TEXT,
   examples TEXT,
   prevalence TEXT,
+  session_id TEXT,
   applied_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS staged_run ON staged (run_id, applied_at);
+
+CREATE TABLE IF NOT EXISTS run_sessions (
+  run_id INTEGER NOT NULL REFERENCES dream_runs(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, session_id)
+);
 
 CREATE TABLE IF NOT EXISTS note_revisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

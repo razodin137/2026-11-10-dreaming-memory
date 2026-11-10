@@ -19,8 +19,13 @@ export function migrate(db) {
   db.exec(fs.readFileSync(SCHEMA_PATH, "utf8"))
   addColumn(db, "notes", "version", "INTEGER NOT NULL DEFAULT 1")
   addColumn(db, "dream_runs", "rejected_at", "TEXT")
+  addColumn(db, "dream_runs", "source_fork", "TEXT")
+  addColumn(db, "dream_runs", "source_path", "TEXT")
   addColumn(db, "staged", "examples", "TEXT")
   addColumn(db, "staged", "prevalence", "TEXT")
+  addColumn(db, "staged", "session_id", "TEXT")
+  addColumn(db, "staged", "target_version", "INTEGER")
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS dream_runs_source ON dream_runs (source_fork) WHERE source_fork IS NOT NULL")
   return db
 }
 

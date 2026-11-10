@@ -10,6 +10,7 @@ mem.db
 ├── note_hits     who recalled what, when — drives decay and promotion
 ├── sessions      one row per agent session, carrying its diary
 ├── staged        dream output, applied deterministically
+├── run_sessions  which sessions a run was distilled from
 ├── note_revisions  the previous version of every note that changed
 └── dream_runs    an audit log of every night
 ```
@@ -86,13 +87,42 @@ mem dream apply 7                          # commit it
 mem dream reject 7                         # or throw it away
 ```
 
+### Fan-out nights
+
+One agent fed every session does not scale. `scripts/dream.sh` forks the live store,
+writes one transcript per undistilled session, and runs one agent per transcript in
+parallel. Each agent is pointed at its own session and at the copy; it proposes
+candidates only, never edits notes:
+
+```sh
+mem dream fork --path                  # copies the live store to $MEM_OUT
+mem dream transcripts --dir .scratch/dream/transcripts --since 2026-11-09T00:00:00Z
+MEM_AGENT=./agent mem dream propose --db "$MEM_OUT" --session s-001 .scratch/dream/candidates/s-001.json
+mem dream collect "$MEM_OUT"           # stages the copy's rows as one run
+```
+
+`collect` merges duplicate facts across agents, drops a stale update when a later
+session proposes a newer one, and skips any candidate it cannot attribute to a session.
+It also records the copy's `fork_id`, so collecting the same `$MEM_OUT` twice returns
+the same run instead of staging it again.
+
+Review and apply are still the only ways into live memory. The copy is never promoted
+wholesale: `mem dream apply RUN` and `mem dream reject RUN` both delete `$MEM_OUT` when
+they finish with a run. A night that goes wrong is one deleted file away from never
+having happened.
+
+The fan-out defaults to one agent per session, `PARALLEL=4`. For a quiet night,
+`MODE=single ./scripts/dream.sh` sends one packet to one agent; its candidates must set
+`session` (or be staged with `--session`) so `collect` can attribute them. `APPLY=0`
+stops after collect so you can review the run first.
+
 ```cron
 0 3 * * * cd ~/src/dreaming-memory && ./scripts/dream.sh >> .scratch/dream.log 2>&1
 ```
 
-`scripts/dream.sh` takes the agent command from `MEM_AGENT` (a wrapper that reads the
-packet on stdin and prints candidate JSON). Without it, the script stops after building
-the packet so you can inspect it.
+`scripts/dream.sh` takes the agent command from `MEM_AGENT` (a wrapper that reads one
+transcript on stdin and prints candidate JSON). Without it, the script forks the store
+and stops so you can inspect the copy.
 
 ## Hooking up `try`
 
