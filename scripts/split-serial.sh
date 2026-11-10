@@ -93,7 +93,7 @@ for file in "${files[@]}"; do
   fi
 
   if [ "$COMMIT" = "1" ]; then
-    git add -A -- . ':(exclude).scratch'
+    git add -A -- .
     if git diff --cached --quiet; then
       echo "== $name: nothing to commit"
     else
