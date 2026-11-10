@@ -1,2 +1,0 @@
-Make proposals carry their evidence
-Two new fields on a candidate: examples (the session ids and file:line excerpts that show the problem happening) and prevalence (something like "7 of 23 sessions"). Today a candidate has only a free-text reason, which means a month from now you can't tell a real pattern from a model's hunch. These get stored with the staged row, shown in review, and kept in the dream-run summary.
