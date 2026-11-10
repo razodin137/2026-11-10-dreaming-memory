@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import test from "node:test"
@@ -198,6 +199,59 @@ test("dream stages then applies candidates deterministically", () => {
   assert.equal(result.inserted, 1)
   assert.equal(result.merged, 1)
   assert.equal(result.problems.length, 1)
+})
+
+test("dream stage records proposals without touching live memory", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  remember(db, { projectId: alpha.id, kind: "gotcha", body: "redis listens on 6379", provenance: "s1" })
+  const before = db.prepare("SELECT id, body, confidence, version FROM notes ORDER BY id").all()
+
+  const staged = stage(db, {
+    since: null,
+    candidates: [
+      { op: "insert", project: alpha.slug, kind: "gotcha", body: "bin/setup needs redis running", provenance: "s2" },
+      { op: "update", target_id: before[0].id, body: "redis listens on 6380", provenance: "s3" }
+    ]
+  })
+
+  assert.equal(staged.staged, 2)
+  assert.equal(staged.problems.length, 0)
+  assert.deepEqual(
+    db.prepare("SELECT id, body, confidence, version FROM notes ORDER BY id").all(),
+    before
+  )
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM staged WHERE run_id = ? AND applied_at IS NULL").get(staged.runId).n,
+    2
+  )
+  assert.equal(db.prepare("SELECT finished_at FROM dream_runs WHERE id = ?").get(staged.runId).finished_at, null)
+})
+
+test("mem dream stage writes proposals and leaves notes untouched", () => {
+  const dir = fs.mkdtempSync(path.join(SCRATCH, "stage-"))
+  const dbPath = path.join(dir, "memory.db")
+  const file = path.join(dir, "candidates.json")
+  const bin = path.join(import.meta.dirname, "..", "bin", "mem.js")
+  fs.writeFileSync(file, JSON.stringify({
+    candidates: [
+      { op: "insert", scope: "global", kind: "fact", body: "node 26 ships node:sqlite", provenance: "s1" },
+      { op: "insert", scope: "global", kind: "fact", body: "node 26 ships node:sqlite", provenance: "s2" }
+    ]
+  }))
+
+  const initialized = JSON.parse(execFileSync(process.execPath, [ bin, "init", "--db", dbPath ], { encoding: "utf8" }))
+  assert.equal(initialized.live, 0)
+
+  const output = JSON.parse(execFileSync(process.execPath, [ bin, "dream", "stage", file, "--db", dbPath ], { encoding: "utf8" }))
+  assert.equal(output.staged, 2)
+
+  const db = new DatabaseSync(dbPath)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 0)
+  const rows = db.prepare("SELECT * FROM staged WHERE run_id = ?").all(output.runId)
+  assert.equal(rows.length, 2)
+  assert.ok(rows.every((row) => row.applied_at === null))
+  db.close()
 })
 
 test("applying an update keeps the previous note in note_revisions", () => {

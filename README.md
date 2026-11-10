@@ -42,6 +42,9 @@ global only once the same claim has been hit in two different projects.
 as deterministic `insert | merge | update | retire` operations, deduped by a normalized
 fingerprint. A bad night is one transaction away from being reverted.
 
+`mem dream stage FILE` writes the proposals to `staged` and stops there — live memory is
+untouched until a run is applied.
+
 **Every changed note leaves its previous self behind.** Before an update or promotion
 changes a note's body or scope, the old row is copied into `note_revisions` with the dream
 run that caused it. `mem revisions --note 42` shows what a note said before each change.

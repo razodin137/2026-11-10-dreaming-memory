@@ -73,6 +73,9 @@ export function run(argv) {
     }
 
     case "dream": {
+      if (rest[0] === "stage") {
+        return print(stage(db, { candidates: readCandidates(rest[1]), since: flags.since || null }))
+      }
       if (flags.packet) {
         const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
         return print(packet(db, {
@@ -81,9 +84,7 @@ export function run(argv) {
         }))
       }
       if (flags.apply) {
-        const candidates = JSON.parse(readText(require(flags.apply, "--apply")))
-        const list_ = Array.isArray(candidates) ? candidates : candidates.candidates
-        const staged = stage(db, { candidates: list_, since: flags.since || null })
+        const staged = stage(db, { candidates: readCandidates(flags.apply), since: flags.since || null })
         const applied = apply(db, staged.runId)
         return print({ ...staged, ...applied })
       }
@@ -93,7 +94,7 @@ export function run(argv) {
         const archived = archiveStale(db, flags.archiveDays ? Number(flags.archiveDays) : 30)
         return print({ ...promotion, ...pruning, archived })
       }
-      throw new Error("usage: mem dream --packet | --apply FILE | --auto")
+      throw new Error("usage: mem dream --packet | stage FILE | --apply FILE | --auto")
     }
 
     case "promote":
@@ -154,6 +155,15 @@ function textArg(flags, rest) {
   return value.trim()
 }
 
+function readCandidates(source) {
+  const parsed = JSON.parse(readText(require(source, "candidates FILE")))
+  const candidates = Array.isArray(parsed) ? parsed : parsed.candidates
+  if (!Array.isArray(candidates)) {
+    throw new Error("candidates must be a JSON array or an object with a candidates array")
+  }
+  return candidates
+}
+
 function readText(source) {
   if (!source || source === true) return null
   return fs.readFileSync(path.resolve(source), "utf8")
@@ -181,7 +191,7 @@ function usage() {
     "mem session start|end|diary [--id ID] [--diary FILE]",
     "mem remember --body TEXT [--kind gotcha] [--scope project] [--confidence 0.6]",
     "mem recall [--query TEXT] [--limit 12]",
-    "mem dream --packet | --apply FILE | --auto",
+    "mem dream --packet | stage FILE | --apply FILE | --auto",
     "mem revisions [--note ID] [--run RUN] [--limit 50]",
     "mem promote | decay | materialize | stats"
   ].join("\n")
