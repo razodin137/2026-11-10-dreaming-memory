@@ -12,7 +12,9 @@ export const CANDIDATE_SCHEMA = {
   confidence: "0..1",
   provenance: "session id or file:line that this came from",
   target_id: "note id, required for update and retire",
-  reason: "why this candidate exists"
+  reason: "why this candidate exists",
+  examples: "array of { session, excerpt } showing the pattern",
+  prevalence: "how often it happened, e.g. \"7 of 23 sessions\""
 }
 
 export function packet(db, { projectId = null, since, limit = 40 } = {}) {
@@ -61,8 +63,8 @@ export function stage(db, { candidates, since }) {
   const run = db.prepare("INSERT INTO dream_runs (started_at) VALUES (?)").run(now())
   const runId = Number(run.lastInsertRowid)
   const insert = db.prepare(`
-    INSERT INTO staged (run_id, op, project_slug, scope, kind, body, confidence, provenance, target_id, reason)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO staged (run_id, op, project_slug, scope, kind, body, confidence, provenance, target_id, reason, examples, prevalence)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const problems = [ ]
   let stagedCount = 0
@@ -84,13 +86,153 @@ export function stage(db, { candidates, since }) {
         clamp(candidate.confidence ?? 0.5),
         candidate.provenance || "",
         candidate.target_id || null,
-        candidate.reason || null
+        candidate.reason || null,
+        encodeExamples(candidate.examples),
+        candidate.prevalence ? String(candidate.prevalence) : null
       )
       stagedCount += 1
     }
   })
 
   return { runId, staged: stagedCount, problems, since }
+}
+
+export function review(db, runId) {
+  const run = db.prepare("SELECT * FROM dream_runs WHERE id = ?").get(runId)
+  if (!run) throw new Error(`dream run ${runId} not found`)
+  const rows = db.prepare("SELECT * FROM staged WHERE run_id = ? ORDER BY id").all(runId)
+  const applied = rows.filter((row) => row.applied_at).length
+  return {
+    runId: Number(runId),
+    started_at: run.started_at,
+    finished_at: run.finished_at,
+    proposals: rows.length,
+    applied,
+    pending: rows.length - applied,
+    changes: rows.map((row) => describe(db, row))
+  }
+}
+
+export function formatReview(report) {
+  const count = `${report.proposals} proposal${report.proposals === 1 ? "" : "s"}`
+  const status = report.pending === 0
+    ? "applied"
+    : report.applied > 0 ? "partially applied" : "not applied"
+  const lines = [ `dream run ${report.runId} — ${count}, ${status}`, "" ]
+
+  if (report.changes.length === 0) {
+    lines.push("(no proposals staged)")
+    return lines.join("\n")
+  }
+
+  for (const [ index, change ] of report.changes.entries()) {
+    lines.push(...formatChange(change, index + 1))
+    lines.push("")
+  }
+
+  return lines.join("\n").trimEnd()
+}
+
+function formatChange(change, index) {
+  const confidence = Number(change.confidence).toFixed(2)
+  const target = change.target ? `  -> note #${change.target.id}` : ""
+  const marker = change.applied_at ? "  [applied]" : ""
+  const lines = [
+    `${index}. ${change.op}  ${change.project} / ${change.kind}  confidence ${confidence}${target}${marker}`
+  ]
+
+  if (change.op === "update") {
+    lines.push(field("before:", change.target ? change.target.body : "(target missing)"))
+    lines.push(field("after:", change.body))
+  } else if (change.op === "retire") {
+    lines.push(field("note:", change.target ? change.target.body : "(target missing)"))
+  } else {
+    lines.push(field("note:", change.body))
+    lines.push(field("merges:", change.target
+      ? `#${change.target.id} ${change.target.body}`
+      : "(new note)"))
+  }
+
+  lines.push(field("evidence:", formatExamples(change.examples) || "(none)"))
+  lines.push(field("prevalence:", change.prevalence || "(not given)"))
+  if (change.provenance) lines.push(field("provenance:", change.provenance))
+  if (change.reason) lines.push(field("reason:", change.reason))
+
+  return lines
+}
+
+function describe(db, row) {
+  const project = row.project_slug ? bySlug(db, row.project_slug) : null
+  return {
+    id: row.id,
+    op: row.op,
+    project: row.project_slug || "global",
+    scope: row.scope,
+    kind: row.kind,
+    body: row.body,
+    confidence: Number(row.confidence),
+    provenance: row.provenance || null,
+    reason: row.reason || null,
+    examples: decodeExamples(row.examples),
+    prevalence: row.prevalence || null,
+    target: targetFor(db, row, project),
+    applied_at: row.applied_at || null
+  }
+}
+
+function targetFor(db, row, project) {
+  if (row.op === "update" || row.op === "retire") {
+    if (!row.target_id) return null
+    return noteSummary(db.prepare("SELECT * FROM notes WHERE id = ?").get(row.target_id))
+  }
+  const projectId = row.scope === "global" ? 0 : project ? project.id : 0
+  return noteSummary(db.prepare(`
+    SELECT * FROM notes
+    WHERE scope = ? AND IFNULL(project_id, 0) = ? AND kind = ? AND fingerprint = ? AND retired_at IS NULL
+  `).get(row.scope, projectId, row.kind, fingerprint(row.body)))
+}
+
+function noteSummary(note) {
+  if (!note) return null
+  return {
+    id: note.id,
+    scope: note.scope,
+    kind: note.kind,
+    body: note.body,
+    confidence: Number(note.confidence)
+  }
+}
+
+function field(label, value) {
+  return `   ${label.padEnd(12)}${value}`
+}
+
+function encodeExamples(value) {
+  if (value === undefined || value === null || value === "") return null
+  if (typeof value === "string") return value
+  return JSON.stringify(value)
+}
+
+function decodeExamples(value) {
+  if (!value) return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+function formatExamples(examples) {
+  if (!examples) return null
+  if (!Array.isArray(examples)) return String(examples)
+  return examples.map((example) => {
+    if (example && typeof example === "object") {
+      const where = example.session || example.id || ""
+      const excerpt = example.excerpt || example.file || example.line || ""
+      return [ where, excerpt ].filter(Boolean).join(" at ")
+    }
+    return String(example)
+  }).join("; ")
 }
 
 export function apply(db, runId) {

@@ -18,6 +18,8 @@ export function open(dbPath = DEFAULT_DB) {
 export function migrate(db) {
   db.exec(fs.readFileSync(SCHEMA_PATH, "utf8"))
   addColumn(db, "notes", "version", "INTEGER NOT NULL DEFAULT 1")
+  addColumn(db, "staged", "examples", "TEXT")
+  addColumn(db, "staged", "prevalence", "TEXT")
   return db
 }
 

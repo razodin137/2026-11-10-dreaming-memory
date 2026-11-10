@@ -45,6 +45,10 @@ fingerprint. A bad night is one transaction away from being reverted.
 `mem dream stage FILE` writes the proposals to `staged` and stops there — live memory is
 untouched until a run is applied.
 
+`mem dream review RUN` prints what that run would do, one proposal at a time: the operation,
+project, kind, note text, confidence, the note it would merge into or replace, and the
+evidence and prevalence behind it. Review is read-only; nothing is applied.
+
 **Every changed note leaves its previous self behind.** Before an update or promotion
 changes a note's body or scope, the old row is copied into `note_revisions` with the dream
 run that caused it. `mem revisions --note 42` shows what a note said before each change.

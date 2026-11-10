@@ -8,7 +8,7 @@ import { SCHEMA_PATH, migrate } from "../src/db.js"
 import { materialize } from "../src/materialize.js"
 import { decay, promote, recall, remember } from "../src/notes.js"
 import { register } from "../src/projects.js"
-import { apply, stage } from "../src/dream.js"
+import { apply, formatReview, review, stage } from "../src/dream.js"
 
 const SCRATCH = path.join(import.meta.dirname, "..", ".scratch")
 
@@ -251,6 +251,103 @@ test("mem dream stage writes proposals and leaves notes untouched", () => {
   const rows = db.prepare("SELECT * FROM staged WHERE run_id = ?").all(output.runId)
   assert.equal(rows.length, 2)
   assert.ok(rows.every((row) => row.applied_at === null))
+  db.close()
+})
+
+test("dream review describes proposals without applying them", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  const existing = remember(db, {
+    projectId: alpha.id,
+    kind: "gotcha",
+    body: "redis listens on 6379",
+    provenance: "s1"
+  })
+
+  const staged = stage(db, {
+    since: null,
+    candidates: [
+      {
+        op: "insert",
+        project: alpha.slug,
+        kind: "gotcha",
+        body: "Redis listens on 6379",
+        confidence: 0.7,
+        provenance: "s2",
+        examples: [ { session: "s9", excerpt: "bin/setup:12" } ],
+        prevalence: "7 of 23 sessions"
+      },
+      { op: "update", target_id: existing.id, body: "redis listens on 6380", confidence: 0.9 },
+      { op: "retire", target_id: existing.id }
+    ]
+  })
+
+  const report = review(db, staged.runId)
+  assert.equal(report.proposals, 3)
+  assert.equal(report.pending, 3)
+  assert.equal(report.applied, 0)
+  assert.equal(report.changes[0].target.id, existing.id)
+  assert.equal(report.changes[1].target.id, existing.id)
+  assert.equal(report.changes[2].target.id, existing.id)
+
+  const text = formatReview(report)
+  assert.match(text, /not applied/)
+  assert.match(text, /7 of 23 sessions/)
+  assert.match(text, /bin\/setup:12/)
+  assert.match(text, /before:\s+redis listens on 6379/)
+  assert.match(text, /after:\s+redis listens on 6380/)
+
+  assert.equal(db.prepare("SELECT body FROM notes WHERE id = ?").get(existing.id).body, "redis listens on 6379")
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM staged WHERE applied_at IS NOT NULL").get().n, 0)
+})
+
+test("dream review rejects an unknown run", () => {
+  const db = fresh()
+  assert.throws(() => review(db, 404), /dream run 404 not found/)
+})
+
+test("mem dream review prints a human-readable diff and applies nothing", () => {
+  const dir = fs.mkdtempSync(path.join(SCRATCH, "review-"))
+  const dbPath = path.join(dir, "memory.db")
+  const file = path.join(dir, "candidates.json")
+  const bin = path.join(import.meta.dirname, "..", "bin", "mem.js")
+  fs.writeFileSync(file, JSON.stringify({
+    candidates: [
+      {
+        op: "insert",
+        scope: "global",
+        kind: "fact",
+        body: "node 26 ships node:sqlite",
+        confidence: 0.8,
+        provenance: "s1",
+        examples: [ { session: "s1", excerpt: "src/db.js:3" } ],
+        prevalence: "5 of 9 sessions"
+      }
+    ]
+  }))
+
+  execFileSync(process.execPath, [ bin, "init", "--db", dbPath ], { encoding: "utf8" })
+  const staged = JSON.parse(execFileSync(
+    process.execPath,
+    [ bin, "dream", "stage", file, "--db", dbPath ],
+    { encoding: "utf8" }
+  ))
+
+  const stdout = execFileSync(
+    process.execPath,
+    [ bin, "dream", "review", String(staged.runId), "--db", dbPath ],
+    { encoding: "utf8" }
+  )
+
+  assert.match(stdout, /dream run 1/)
+  assert.match(stdout, /insert\s+global \/ fact\s+confidence 0\.80/)
+  assert.match(stdout, /node 26 ships node:sqlite/)
+  assert.match(stdout, /5 of 9 sessions/)
+  assert.match(stdout, /src\/db\.js:3/)
+
+  const db = new DatabaseSync(dbPath)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 0)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM staged WHERE applied_at IS NOT NULL").get().n, 0)
   db.close()
 })
 

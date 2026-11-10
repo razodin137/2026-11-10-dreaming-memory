@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { DEFAULT_DB, init } from "./db.js"
-import { packet, stage, apply } from "./dream.js"
+import { packet, stage, apply, formatReview, review } from "./dream.js"
 import { materialize } from "./materialize.js"
 import { KINDS, SCOPES, decay, promote, recall, remember, revisions, stats } from "./notes.js"
 import { archiveStale, byPath, list, register } from "./projects.js"
@@ -76,6 +76,12 @@ export function run(argv) {
       if (rest[0] === "stage") {
         return print(stage(db, { candidates: readCandidates(rest[1]), since: flags.since || null }))
       }
+      if (rest[0] === "review") {
+        const report = review(db, Number(require(rest[1], "RUN")))
+        if (flags.json) return print(report)
+        process.stdout.write(`${formatReview(report)}\n`)
+        return report
+      }
       if (flags.packet) {
         const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
         return print(packet(db, {
@@ -94,7 +100,7 @@ export function run(argv) {
         const archived = archiveStale(db, flags.archiveDays ? Number(flags.archiveDays) : 30)
         return print({ ...promotion, ...pruning, archived })
       }
-      throw new Error("usage: mem dream --packet | stage FILE | --apply FILE | --auto")
+      throw new Error("usage: mem dream --packet | stage FILE | review RUN | --apply FILE | --auto")
     }
 
     case "promote":
@@ -191,7 +197,7 @@ function usage() {
     "mem session start|end|diary [--id ID] [--diary FILE]",
     "mem remember --body TEXT [--kind gotcha] [--scope project] [--confidence 0.6]",
     "mem recall [--query TEXT] [--limit 12]",
-    "mem dream --packet | stage FILE | --apply FILE | --auto",
+    "mem dream --packet | stage FILE | review RUN [--json] | --apply FILE | --auto",
     "mem revisions [--note ID] [--run RUN] [--limit 50]",
     "mem promote | decay | materialize | stats"
   ].join("\n")

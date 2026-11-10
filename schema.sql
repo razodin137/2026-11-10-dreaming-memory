@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS staged (
   provenance TEXT NOT NULL DEFAULT '',
   target_id INTEGER,
   reason TEXT,
+  examples TEXT,
+  prevalence TEXT,
   applied_at TEXT
 );
 
