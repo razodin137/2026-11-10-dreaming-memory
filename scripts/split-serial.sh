@@ -1,178 +1,105 @@
 #!/usr/bin/env bash
-# Run the split prompts in prompt/ one at a time, each in a
-# fresh session, stopping at the first failure.
+# Replay a prompt pack: one prompt per fresh session, stopping at the first
+# failing gate. Run it in the repo the prompts change.
 #
-#   MODEL=ollama/deepseek-v4.1-flash:1017-cloud ./scripts/split-serial.sh
-#   MODEL=... FROM=8 TO=8 ./scripts/split-serial.sh    # one step only
-#   ONLY=11-state,07-remove,08-shell ./scripts/split-serial.sh   # explicit order
-#   COMMIT=0 ./scripts/split-serial.sh                 # leave commits alone
-#   CHECK_CMD='make test' ./scripts/split-serial.sh    # override the detected gate
-#   CHECK_ONLY=1 ./scripts/split-serial.sh             # print the gates and exit
-#   ALLOW_NO_CHECK=1 ./scripts/split-serial.sh         # run without a project check
+#   ./scripts/split-serial.sh                  pack is ./prompt
+#   ./scripts/split-serial.sh ../packs/listmonk
+#   CHECK_ONLY=1 ./scripts/split-serial.sh     print pack and gate, run nothing
+#   CHECK='make test' ./scripts/split-serial.sh
+#   COMMIT=0 ./scripts/split-serial.sh         leave commits alone
+#   FROM=05-name ./scripts/split-serial.sh     resume at a step
 #
-# Canonical copy. Install it, never retype it:
-#   install -m 755 ~/.config/opencode/scripts/split-serial.sh scripts/split-serial.sh
-# Never edit the copy per project; use CHECK_CMD instead.
-#
-# No --continue and no --session: that is what makes every step a fresh agent.
-# The tree must be clean before the loop starts, and every green step is
-# committed, so a bad step is one `git revert` away.
+# Files run in filename order, so 01-, 02-, 03- sets the order. Logs land in
+# .scratch/split/.
 
-set -uo pipefail
+set -euo pipefail
 
-RUNNER_VERSION=2
+usage() {
+  awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"
+}
 
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-LOGS="$ROOT/.scratch/split"
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  usage
+  exit 0
+fi
+
+if ! [ -d prompt ] && [ "$(basename "$PWD")" = "scripts" ] && [ -d ../prompt ]; then
+  cd ..
+fi
+
+PACK=${1:-${PACK:-prompt}}
 MODEL=${MODEL:-ollama/deepseek-v4.1-flash:1017-cloud}
-FROM=${FROM:-1}
-TO=${TO:-99}
 COMMIT=${COMMIT:-1}
-ONLY=${ONLY:-}
-CHECK_CMD=${CHECK_CMD:-__detect__}
-CHECK_ONLY=${CHECK_ONLY:-0}
-ALLOW_NO_CHECK=${ALLOW_NO_CHECK:-0}
+FROM=${FROM:-}
+LOGS=.scratch/split
 
-if [ "${1:-}" = "--version" ]; then
-  printf 'split-serial %s\n' "$RUNNER_VERSION"
-  exit 0
-fi
-
-mkdir -p "$LOGS"
-cd "$ROOT" || exit 1
-
-has_make_target() {
-  make -n "$1" >/dev/null 2>&1
-}
-
-detect_check() {
-  if [ "$CHECK_CMD" != "__detect__" ]; then
-    printf '%s\n' "$CHECK_CMD"
-  elif [ -f package.json ] && node -e \
-      'process.exit(require("./package.json").scripts?.check ? 0 : 1)' 2>/dev/null; then
-    printf 'npm run check\n'
-  elif [ -f Makefile ]; then
-    local check="" target
-    for target in test lint; do
-      if has_make_target "$target"; then
-        check="${check:+$check && }make $target"
-      fi
-    done
-    if [ -z "$check" ] && has_make_target check; then
-      check="make check"
-    fi
-    printf '%s\n' "$check"
-  elif [ -f go.mod ]; then
-    printf 'go vet ./... && go test ./...\n'
-  fi
-}
-
-detect_house() {
-  if [ -f go.mod ]; then
-    printf 'go vet ./...\n'
-  elif [ -f package.json ] && node -e \
-      'process.exit(require("./package.json").scripts?.lint ? 0 : 1)' 2>/dev/null; then
-    printf 'npm run lint\n'
-  elif [ -f Gemfile ] && [ -f .rubocop.yml ]; then
-    printf 'bundle exec rubocop\n'
-  fi
-}
-
-CHECK=$(detect_check)
-HOUSE=$(detect_house)
-
-if [ -z "$CHECK" ]; then
-  echo "== no project check detected; set CHECK_CMD to gate each step" >&2
-  if [ "$CHECK_ONLY" = "1" ] || [ "$ALLOW_NO_CHECK" != "1" ]; then
-    exit 1
-  fi
-else
-  echo "== check: $CHECK"
-fi
-
-if [ -n "$HOUSE" ]; then
-  echo "== house: $HOUSE"
-fi
-
-if [ "$CHECK_ONLY" = "1" ]; then
-  exit 0
-fi
-
-if [ -n "$(git status --porcelain --untracked-files=normal -- . ':(exclude).scratch')" ]; then
-  echo "== tree is dirty; commit it before starting" >&2
+if [ ! -d "$PACK" ]; then
+  echo "no pack at $PACK; prompts live in <repo>/$PACK" >&2
   exit 1
 fi
 
 shopt -s nullglob
-if [ -n "$ONLY" ]; then
-  IFS=',' read -r -a files <<<"$ONLY"
-  for i in "${!files[@]}"; do
-    files[$i]="$ROOT/prompt/${files[$i]}.md"
-  done
-else
-  files=("$ROOT"/prompt/*.md)
-fi
+files=("$PACK"/*.md)
 shopt -u nullglob
 
 if [ ${#files[@]} -eq 0 ]; then
-  echo "== no prompts in $ROOT/prompt" >&2
+  echo "no prompts in $PACK" >&2
   exit 1
 fi
 
-for path in "${files[@]}"; do
-  name=$(basename "$path" .md)
-  step=$((10#${name%%-*}))
+CHECK=${CHECK:-}
+if [ -z "$CHECK" ] && [ -f package.json ] && \
+    node -e 'process.exit(require("./package.json").scripts?.check ? 0 : 1)' 2>/dev/null; then
+  CHECK="npm run check"
+fi
 
-  if [ -z "$ONLY" ]; then
-    [ "$step" -lt "$FROM" ] && continue
-    [ "$step" -gt "$TO" ] && continue
+if [ "${CHECK_ONLY:-0}" = "1" ]; then
+  printf 'repo:  %s\n' "$PWD"
+  printf 'pack:  %s (%d prompts)\n' "$PACK" "${#files[@]}"
+  printf 'check: %s\n' "${CHECK:-none}"
+  exit 0
+fi
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  COMMIT=0
+fi
+
+if [ "$COMMIT" = "1" ] && [ -n "$(git status --porcelain --untracked-files=normal -- . ':(exclude).scratch')" ]; then
+  echo "tree is dirty; commit it first, or run with COMMIT=0" >&2
+  exit 1
+fi
+
+mkdir -p "$LOGS"
+
+for file in "${files[@]}"; do
+  name=$(basename "$file" .md)
+  if [ -n "$FROM" ] && [[ "$name" < "$FROM" ]]; then
+    continue
   fi
-
-  if [ ! -f "$path" ]; then
-    echo "== $name: no such prompt" >&2
-    exit 1
-  fi
-
-  blocked="$LOGS/BLOCKED-$name"
-  rm -f "$blocked"
 
   echo "== $name"
-  opencode run -m "$MODEL" --auto --title "split $name" \
-    "$(cat "$path")" 2>&1 | tee "$LOGS/$name.log"
-  status=${PIPESTATUS[0]}
-
-  if [ -f "$blocked" ]; then
-    echo "== $name: blocked, $(cat "$blocked")" >&2
+  if ! opencode run -m "$MODEL" --auto --title "split $name" "$(cat "$file")" 2>&1 \
+      | tee "$LOGS/$name.log"; then
+    echo "== $name: opencode failed, stopping" >&2
     exit 1
   fi
 
-  if [ "$status" -ne 0 ]; then
-    echo "== $name: opencode exited $status, stopping" >&2
-    exit 1
+  if [ -n "$CHECK" ]; then
+    if ! eval "$CHECK" >"$LOGS/$name.check" 2>&1; then
+      echo "== $name: check failed: $CHECK" >&2
+      echo "== see $LOGS/$name.check; fix, then resume with FROM=$name" >&2
+      exit 1
+    fi
   fi
-
-  if [ -n "$CHECK" ] && ! eval "$CHECK" >"$LOGS/$name.check" 2>&1; then
-    echo "== $name: check failed ($CHECK), see $LOGS/$name.check" >&2
-    echo "== the work is uncommitted; fix it, then resume with FROM=$step (or ONLY=$name)" >&2
-    exit 1
-  fi
-
-  if [ -n "$HOUSE" ] && ! eval "$HOUSE" >"$LOGS/$name.house" 2>&1; then
-    echo "== $name: house-style check failed ($HOUSE), see $LOGS/$name.house" >&2
-    echo "== the work is uncommitted; fix it, then resume with FROM=$step (or ONLY=$name)" >&2
-    exit 1
-  fi
-
-  git diff --stat >"$LOGS/$name.diff"
 
   if [ "$COMMIT" = "1" ]; then
     git add -A -- . ':(exclude).scratch'
     if git diff --cached --quiet; then
-      echo "== $name: no changes to commit" >&2
+      echo "== $name: nothing to commit"
     else
       git commit -q -m "split: $name"
     fi
   fi
 done
 
-echo "== finished (runner $RUNNER_VERSION)"
+echo "== finished"
