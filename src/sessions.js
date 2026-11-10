@@ -26,12 +26,40 @@ function reopen(db, existing, projectId) {
   return { ...existing, project_id: projectId, ended_at: null }
 }
 
+export function importSession(db, { id, dir = null, project = null, startedAt = null, endedAt = null, diary = null }) {
+  if (!id) throw new Error("an imported session needs an id")
+  const owner = project || (dir ? register(db, dir) : null)
+  const existing = db.prepare("SELECT * FROM sessions WHERE id = ?").get(id)
+  if (existing) {
+    const projectId = owner ? owner.id : existing.project_id
+    db.prepare(`
+      UPDATE sessions SET project_id = ?, started_at = COALESCE(?, started_at),
+        ended_at = COALESCE(?, ended_at),
+        diary = CASE WHEN ? IS NULL OR ? = '' THEN diary ELSE ? END
+      WHERE id = ?
+    `).run(projectId, startedAt, endedAt, diary, diary, diary, id)
+    return db.prepare("SELECT * FROM sessions WHERE id = ?").get(id)
+  }
+  db.prepare(`
+    INSERT INTO sessions (id, project_id, started_at, ended_at, diary)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    id,
+    owner ? owner.id : null,
+    startedAt || now(),
+    endedAt,
+    diary && String(diary).trim() ? String(diary) : null
+  )
+  return db.prepare("SELECT * FROM sessions WHERE id = ?").get(id)
+}
+
 export function end(db, { id, diary = null, lessons = [ ], commit = true } = { }) {
   const session = db.prepare("SELECT * FROM sessions WHERE id = ?").get(id)
   if (!session) throw new Error(`unknown session: ${id}`)
   const stamp = now()
+  const story = diary || lessonDiary(lessons)
   db.prepare("UPDATE sessions SET ended_at = ?, diary = COALESCE(?, diary) WHERE id = ?")
-    .run(stamp, diary, id)
+    .run(stamp, story, id)
   if (session.project_id) touch(db, session.project_id)
 
   let committed = [ ]
@@ -43,6 +71,11 @@ export function end(db, { id, diary = null, lessons = [ ], commit = true } = { }
   }
 
   return { ...db.prepare("SELECT * FROM sessions WHERE id = ?").get(id), committed, skipped }
+}
+
+function lessonDiary(lessons = [ ]) {
+  const lines = (lessons || [ ]).map((lesson) => String(lesson.body || "").trim()).filter(Boolean)
+  return lines.length > 0 ? lines.join("\n") : null
 }
 
 export function commitLessons(db, session, lessons = [ ]) {

@@ -327,6 +327,12 @@
   }
   .figure-caption b { color: var(--ink); font-weight: 500; }
 
+  .pan-hint {
+    display: none;
+    font-family: var(--mono); font-size: 8px; letter-spacing: .08em; color: var(--rust);
+    text-transform: uppercase; white-space: nowrap;
+  }
+
   /* ---------- diagrams ---------- */
 
   .diagram {
@@ -617,7 +623,7 @@
   }
   .chart-card svg { display: block; width: 100%; height: auto; }
   .chart-head {
-    display: flex; justify-content: space-between; align-items: baseline; gap: 20px;
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 20px;
     margin-bottom: 12px;
   }
   .chart-head .eyebrow { font-size: 9px; color: var(--rust); }
@@ -841,13 +847,20 @@
     .quote { grid-template-columns: 48px 1fr; gap: 16px; }
     .quote .qmark { font-size: 56px; }
     .closing { margin-top: 84px; padding: 60px 0 56px; }
+    .chart-card { overflow-x: auto; }
+    .chart-card svg { min-width: 620px; }
+    .chart-head .unit { display: none; }
+    .pan-hint { display: inline; }
   }
 
   @media (max-width: 560px) {
     .wrap, .wrap-read { width: calc(100% - 28px); }
+    .brand small { display: none; }
+    .top .pill { padding: 7px 10px 7px 12px; font-size: 9px; letter-spacing: .08em; }
     h1 { font-size: clamp(48px, 15vw, 74px); }
     .lede { font-size: 16.5px; }
     .figcap { flex-direction: column; gap: 4px; }
+    .figure-caption { flex-direction: column; gap: 5px; }
     .stats { margin-top: 44px; }
     .stat { padding: 18px 14px; }
     .stat b { font-size: 34px; }
@@ -934,7 +947,7 @@
 
     <div class="stats" aria-label="Project facts">
       <div class="stat"><b>0</b><span>runtime dependencies</span></div>
-      <div class="stat"><b>8</b><span>tables in the ledger</span></div>
+      <div class="stat"><b>8</b><span>core tables in the model</span></div>
       <div class="stat"><b>45d</b><span>confidence half-life</span></div>
       <div class="stat"><b>1</b><span>transaction to undo a night</span></div>
     </div>
@@ -1092,6 +1105,7 @@
       <figcaption class="figure-caption">
         <span><b>Figure 1</b> &nbsp;/&nbsp; The day loop writes and retrieves; the night loop curates.</span>
         <span>Rendered from <code>schema.sql</code> and the CLI</span>
+        <span class="pan-hint">Scroll →</span>
       </figcaption>
     </figure>
 
@@ -1373,6 +1387,7 @@
         <figcaption class="figure-caption">
           <span><b>Figure 2</b> &nbsp;/&nbsp; Stage and review are the boundary between proposal and memory.</span>
           <span>One transaction in, one transaction out</span>
+          <span class="pan-hint">Scroll →</span>
         </figcaption>
     </figure>
 
@@ -1484,11 +1499,12 @@
         <div class="chart-card">
           <div class="chart-head">
             <span class="eyebrow">Decay &middot; 45-day half-life</span>
-            <span class="unit">confidence &middot; no recall hits</span>
+            <span class="unit">confidence &middot; zero uses</span>
+            <span class="pan-hint">Scroll →</span>
           </div>
           <svg viewBox="0 0 780 430" role="img" aria-labelledby="decay-title decay-desc">
             <title id="decay-title">Confidence decay over 200 days</title>
-            <desc id="decay-desc">Three notes starting at confidence 0.92, 0.74, and 0.66 decline by half every 45 days. A dashed red threshold at 0.05 marks retirement, reached between 167 and 189 days.</desc>
+            <desc id="decay-desc">Three notes with zero uses starting at confidence 0.92, 0.74, and 0.66 decline by half every 45 days. A dashed red threshold at 0.05 marks retirement, reached between 167 and 189 days.</desc>
 
             <rect class="retire-band" x="70" y="354" width="660" height="16"></rect>
             <line class="grid-line" x1="70" y1="50" x2="730" y2="50"></line>
@@ -1544,15 +1560,15 @@
       <div class="chart-copy">
         <h3>A note nobody recalls is gone in about six months.</h3>
         <p>
-          <code>mem decay</code> sets confidence to <b>min(confidence, confidence &times; 2<sup>&minus;age/45</sup>)</b> and retires
-          anything below <b>0.05</b>. A hit does not raise confidence directly; it lifts the recall score and keeps the note in front
-          of agents, which is how it gets used again.
+          <code>mem decay</code> sets confidence to <b>min(confidence, confidence &times; 2<sup>&minus;age/45</sup> &times; (1 + ln(1 + uses)))</b>
+          and retires anything below <b>0.05</b>. A retrieval hit lifts the recall score and keeps the note in front of agents,
+          which is how it gets used again; a use also slows the decay through <code>use_count</code>.
         </p>
         <p>
-          The top note falls from 0.92 to 0.05 in <b>189 days</b>. The 0.74 note takes 175 days. One `decay` pass is a single night;
-          these lines are the long-run shape.
+          The chart assumes a note with <b>zero uses</b>. The top note falls from 0.92 to 0.05 in <b>189 days</b>. The 0.74 note takes
+          175 days. One <code>decay</code> pass is a single night; these lines are the long-run shape.
         </p>
-        <p class="data-note">AGE IS DAYS SINCE updated_at. use_count IS NOT PART OF DECAY; IT ONLY LIFTS THE RECALL SCORE.</p>
+        <p class="data-note">AGE IS DAYS SINCE updated_at. CHART ASSUMES use_count = 0.<br>RETRIEVAL HITS DO NOT TOUCH DECAY; use_count DOES.</p>
       </div>
     </div>
 
@@ -1562,6 +1578,7 @@
           <div class="chart-head">
             <span class="eyebrow">Recall &middot; one scratch project</span>
             <span class="unit">score &middot; after one recall + one run</span>
+            <span class="pan-hint">Scroll →</span>
           </div>
           <svg viewBox="0 0 780 450" role="img" aria-labelledby="score-title score-desc">
             <title id="score-title">Recall scores against confidence</title>
@@ -1636,7 +1653,7 @@
       <div class="section-no">05 / INSIDE</div>
       <h2 id="hood-title">Small enough<br><em>to read.</em></h2>
       <p class="section-intro">
-        No service, no vector database, no runtime dependencies. Node&rsquo;s built-in SQLite, five FTS triggers, and a single
+        No service, no vector database, no runtime dependencies. Node&rsquo;s built-in SQLite, FTS5 search, and a single
         file plus its WAL siblings. Point <code>MEMORY_DB</code> anywhere and move on.
       </p>
     </div>
@@ -1776,13 +1793,6 @@
         </a>
         <figcaption><b>Bottlenecks in production</b> &nbsp;/&nbsp; 09:00 &nbsp;&middot;&nbsp; concurrent writes, lost attribution, stale scopes. &nbsp;&middot;&nbsp; <a href="https://youtu.be/tTcxVv8HHNw?t=540" target="_blank" rel="noopener">watch ↗</a></figcaption>
       </figure>
-
-      <figure class="frame reveal">
-        <a href="assets/talk/how-dreaming-works.jpg" target="_blank" rel="noopener">
-          <img src="assets/talk/how-dreaming-works.jpg" alt="Talk slide How dreaming works: transcripts feed a periodic batch process, which updates the memory state, making the next day's agents more intelligent." loading="lazy" width="1280" height="720">
-        </a>
-        <figcaption><b>How dreaming works</b> &nbsp;/&nbsp; 20:05 &nbsp;&middot;&nbsp; next day&rsquo;s agent sessions are automatically more intelligent. &nbsp;&middot;&nbsp; <a href="https://youtu.be/tTcxVv8HHNw?t=1205" target="_blank" rel="noopener">watch ↗</a></figcaption>
-      </figure>
     </div>
   </section>
 
@@ -1797,7 +1807,7 @@
         </p>
         <div class="closing-links">
           <a href="https://www.youtube.com/watch?v=tTcxVv8HHNw" target="_blank" rel="noopener">Watch the talk ↗</a>
-          <a href="README.md">README</a>
+          <a href="https://github.com/razodin137/2026-11-10-dreaming-memory#readme">README</a>
           <a href="#usage">Usage</a>
         </div>
       </div>

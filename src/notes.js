@@ -23,6 +23,7 @@ export function remember(db, note, options = { }) {
   if (scope === "project" && !note.projectId) {
     throw new Error("a project note needs a project")
   }
+  if (sessionId) ensureSessionRow(db, sessionId, note.projectId, note.startedAt)
 
   const topic = note.topic === undefined || note.topic === null
     ? null
@@ -410,6 +411,12 @@ export function encodeExamples(value) {
   if (value === undefined || value === null || value === "") return null
   if (typeof value === "string") return value
   return JSON.stringify(value)
+}
+
+function ensureSessionRow(db, id, projectId, startedAt = null) {
+  if (db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(id)) return
+  db.prepare("INSERT INTO sessions (id, project_id, started_at) VALUES (?, ?, ?)")
+    .run(id, projectId ?? null, startedAt || now())
 }
 
 function exampleList(value) {

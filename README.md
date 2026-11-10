@@ -45,11 +45,13 @@ $ node bin/mem.js sync
 <table>
   <tr>
     <td align="center" width="25%"><h3>0</h3><sub>runtime dependencies</sub></td>
-    <td align="center" width="25%"><h3>8</h3><sub>tables in the ledger</sub></td>
+    <td align="center" width="25%"><h3>8</h3><sub>core tables in the model</sub></td>
     <td align="center" width="25%"><h3>45d</h3><sub>confidence half-life</sub></td>
     <td align="center" width="25%"><h3>1</h3><sub>transaction to undo a night</sub></td>
   </tr>
 </table>
+
+<p align="center"><sub>Tap any diagram or chart to open it full size.</sub></p>
 
 ---
 
@@ -62,7 +64,7 @@ $ node bin/mem.js sync
 | Agents `remember` and `recall` during a session. A per-file lock serialises live edits and nightly rewrites. | A batch agent reads the day’s transcripts and the current topic files, then proposes changes to memory. |
 
 <p align="center">
-  <img src="assets/readme/two-loops.svg" alt="Diagram: three agents read and write a shared memory.db in real time; at night a packet is exported, an agent proposes candidates, they are staged and reviewed, and only apply writes back to the store." width="100%">
+  <a href="assets/readme/two-loops.svg"><img src="assets/readme/two-loops.svg" alt="Diagram: three agents read and write a shared memory.db in real time; at night a packet is exported, an agent proposes candidates, they are staged and reviewed, and only apply writes back to the store." width="100%"></a>
 </p>
 
 <p align="center"><sub><b>Figure 1</b> — The day loop writes and retrieves; the night loop curates. Nothing destructive happens without a run id.</sub></p>
@@ -164,7 +166,7 @@ $ node bin/mem.js topics
 }
 ```
 
-The same note in `memory/deploy.md`:
+After enrichment, the topic file carries the same note plus its evidence:
 
 ```markdown
 # Deploy
@@ -259,7 +261,7 @@ Dreaming is not a bigger prompt. It is a batch job with its own budget, its own 
 The packet carries the undistilled sessions and the current topic files. An agent reads all of it and proposes candidates: an insert, a merge into an existing note, an update with a known correction, or a retire. `stage` writes those proposals as one run. `review` shows the operation, the note it targets, the evidence, and the prevalence. Only `apply` changes live memory.
 
 <p align="center">
-  <img src="assets/readme/nightly-pass.svg" alt="Flowchart: sessions become a packet, an agent reads it, proposals are staged, reviewed, then applied or rejected. Apply writes notes and revisions, materializes files, and feeds the next morning’s sessions." width="100%">
+  <a href="assets/readme/nightly-pass.svg"><img src="assets/readme/nightly-pass.svg" alt="Flowchart: sessions become a packet, an agent reads it, proposals are staged, reviewed, then applied or rejected. Apply writes notes and revisions, materializes files, and feeds the next morning’s sessions." width="100%"></a>
 </p>
 
 <p align="center"><sub><b>Figure 2</b> — Stage and review are the boundary between proposal and memory. One transaction in, one transaction out.</sub></p>
@@ -312,15 +314,15 @@ Apply and reject both delete `$MEM_OUT`. A night that goes wrong is one deleted 
 Two mechanics do most of the work: a recall score that lets use beat confidence, and a decay curve that retires what nobody asks for. Both use the constants in [`src/notes.js`](src/notes.js).
 
 <p align="center">
-  <img src="assets/readme/decay.svg" alt="Line chart: three notes starting at confidence 0.92, 0.74 and 0.66 halve every 45 days and cross the 0.05 retirement threshold between 167 and 189 days." width="100%">
+  <a href="assets/readme/decay.svg"><img src="assets/readme/decay.svg" alt="Line chart: three notes starting at confidence 0.92, 0.74 and 0.66 halve every 45 days and cross the 0.05 retirement threshold between 167 and 189 days." width="100%"></a>
 </p>
 
-<p align="center"><sub><b>Figure 3</b> — Decay with no recall hits. The top note falls from 0.92 to 0.05 in 189 days; the 0.74 note takes 175 days.</sub></p>
+<p align="center"><sub><b>Figure 3</b> — Decay with zero uses and no retrieval hits. The top note falls from 0.92 to 0.05 in 189 days; the 0.74 note takes 175 days.</sub></p>
 
-`mem decay` sets confidence to **min(confidence, confidence × 2<sup>−age/45</sup>)** and retires anything below **0.05**. A hit does not raise confidence directly; it lifts the recall score and keeps the note in front of agents, which is how it gets used again.
+`mem decay` sets confidence to **min(confidence, confidence × 2<sup>−age/45</sup> × (1 + ln(1 + uses)))** and retires anything below **0.05**. A retrieval hit lifts the recall score and keeps the note in front of agents, which is how it gets used again; a use also slows the decay through `use_count`.
 
 <p align="center">
-  <img src="assets/readme/recall-score.svg" alt="Bar chart comparing confidence with recall score for three notes. A deploy gotcha scores 1.56 from confidence 0.92; a convention scores 1.42 from 0.84; an unhit note scores exactly its 0.74 confidence." width="100%">
+  <a href="assets/readme/recall-score.svg"><img src="assets/readme/recall-score.svg" alt="Bar chart comparing confidence with recall score for three notes. A deploy gotcha scores 1.56 from confidence 0.92; a convention scores 1.42 from 0.84; an unhit note scores exactly its 0.74 confidence." width="100%"></a>
 </p>
 
 <p align="center"><sub><b>Figure 4</b> — After one recall and one dream run. The 0.74 migration note has no hits yet, so its score is exactly its confidence.</sub></p>
@@ -341,7 +343,7 @@ That is the whole trick. Survival is not a property of the prose; it is a proper
 
 ## Small enough to read
 
-No service, no vector database, no runtime dependencies. Node’s built-in SQLite, five FTS triggers, and a single file plus its WAL siblings. Point `MEMORY_DB` anywhere and move on.
+No service, no vector database, no runtime dependencies. Node’s built-in SQLite, FTS5 search, and a single file plus its WAL siblings. Point `MEMORY_DB` anywhere and move on.
 
 | Table | Role |
 |:--|:--|

@@ -41,7 +41,7 @@
 </style>
 <rect x="0" y="0" width="780" height="430" fill="#f8f4eb"/>
             <title id="decay-title">Confidence decay over 200 days</title>
-            <desc id="decay-desc">Three notes starting at confidence 0.92, 0.74, and 0.66 decline by half every 45 days. A dashed red threshold at 0.05 marks retirement, reached between 167 and 189 days.</desc>
+            <desc id="decay-desc">Three notes with zero uses starting at confidence 0.92, 0.74, and 0.66 decline by half every 45 days. A dashed red threshold at 0.05 marks retirement, reached between 167 and 189 days.</desc>
 
             <rect class="retire-band" x="70" y="354" width="660" height="16"></rect>
             <line class="grid-line" x1="70" y1="50" x2="730" y2="50"></line>

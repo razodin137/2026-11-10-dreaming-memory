@@ -59,6 +59,17 @@ export function similarity(left, right) {
   return common / (a.size + b.size - common)
 }
 
+export function mentions(body, text) {
+  const wanted = new Set(claimTokens(body))
+  if (wanted.size === 0) return false
+  const seen = new Set(claimTokens(text))
+  let shared = 0
+  for (const token of wanted) {
+    if (seen.has(token)) shared += 1
+  }
+  return shared >= (wanted.size <= 3 ? 1 : 2)
+}
+
 export function sameClaim(left, right, { threshold = 0.6 } = { }) {
   if (!left || !right) return false
   const leftNumbers = numbers(left)

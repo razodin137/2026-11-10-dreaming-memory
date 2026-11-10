@@ -279,7 +279,7 @@ function exitOf(event) {
 
 function signatureFor(command, output) {
   const error = firstError(output)
-  const text = `${command} ${error || ""}`.toLowerCase()
+  const text = String(error || command).toLowerCase()
   return text
     .replace(/0x[0-9a-f]+/g, "#")
     .replace(/\b\d+(?:\.\d+)*\b/g, "#")

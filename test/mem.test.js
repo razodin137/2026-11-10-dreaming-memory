@@ -201,10 +201,11 @@ test("dream stages then applies candidates deterministically", () => {
       { op: "retire", target_id: 999 }
     ]
   })
-  assert.equal(staged.staged, 3)
+  assert.equal(staged.staged, 2)
+  assert.equal(staged.merged, 1)
   const result = apply(db, staged.runId)
   assert.equal(result.inserted, 1)
-  assert.equal(result.merged, 1)
+  assert.equal(result.merged, 0)
   assert.equal(result.problems.length, 1)
 })
 
@@ -251,12 +252,12 @@ test("mem dream stage writes proposals and leaves notes untouched", () => {
   assert.equal(initialized.live, 0)
 
   const output = JSON.parse(execFileSync(process.execPath, [ bin, "dream", "stage", file, "--db", dbPath ], { encoding: "utf8" }))
-  assert.equal(output.staged, 2)
+  assert.equal(output.staged, 1)
 
   const db = new DatabaseSync(dbPath)
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 0)
   const rows = db.prepare("SELECT * FROM staged WHERE run_id = ?").all(output.runId)
-  assert.equal(rows.length, 2)
+  assert.equal(rows.length, 1)
   assert.ok(rows.every((row) => row.applied_at === null))
   db.close()
 })

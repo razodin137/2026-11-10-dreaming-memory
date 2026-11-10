@@ -10,8 +10,8 @@ import { enrich } from "./enrich.js"
 import { materialize } from "./materialize.js"
 import { KINDS, SCOPES, decay, recall, recordUse, revisions, stats } from "./notes.js"
 import { organize } from "./organize.js"
-import { archiveStale, byPath, list, register } from "./projects.js"
-import { end, start, writeDiary } from "./sessions.js"
+import { archiveStale, byPath, list, register, resolve as resolveProject } from "./projects.js"
+import { end, importSession, start, writeDiary } from "./sessions.js"
 import { describe as steeringDescribe, ensure as steeringEnsure } from "./steering.js"
 import {
   failures as failedToolCalls, ingest as ingestToolCalls, record as recordToolCall, recurring as recurringToolCalls
@@ -59,7 +59,7 @@ export function run(argv) {
         const lessons = readLessons(flags.learn || flags.lessons)
         const result = end(db, {
           id: require(flags.id || sessionId, "--id"),
-          diary: readText(flags.diary),
+          diary: diaryArg(flags.diary),
           lessons,
           commit: flags["no-commit"] ? false : true
         })
@@ -67,6 +67,21 @@ export function run(argv) {
       }
       if (action === "diary") {
         return print(writeDiary(db, { id: require(flags.id || sessionId, "--id"), text: textArg(flags, rest) }))
+      }
+      if (action === "import") {
+        const id = require(flags.id || sessionId, "--id")
+        const imported = importSession(db, {
+          id,
+          dir: flags.path || cwd,
+          project: flags.project ? (resolveProject(db, flags.project) || register(db, flags.project)) : null,
+          startedAt: flags["started-at"] || flags.startedAt || null,
+          endedAt: flags["ended-at"] || flags.endedAt || null,
+          diary: diaryArg(flags.diary)
+        })
+        if (flags.transcript) {
+          ingestToolCalls(db, { sessionId: id, events: readText(flags.transcript) })
+        }
+        return print(imported)
       }
       if (action === "tool") {
         return print(recordToolCall(db, {
@@ -193,7 +208,7 @@ export function run(argv) {
         return print(propose(db, { sessionId: flags.session || null, candidates: readCandidates(rest[1]) }))
       }
       if (rest[0] === "collect") {
-        return print(collect(db, rest[1] || flags.out))
+        return print(collect(db, rest[1] || flags.out, { minPrevalence: minPrevalenceFlag(flags) }))
       }
       if (rest[0] === "failures") {
         const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
@@ -208,7 +223,11 @@ export function run(argv) {
         })
       }
       if (rest[0] === "stage") {
-        return print(stage(db, { candidates: readCandidates(rest[1]), since: flags.since || null }))
+        return print(stage(db, {
+          candidates: readCandidates(rest[1]),
+          since: flags.since || null,
+          minPrevalence: minPrevalenceFlag(flags)
+        }))
       }
       if (rest[0] === "review") {
         const report = review(db, Number(require(rest[1], "RUN")))
@@ -253,7 +272,7 @@ export function run(argv) {
         }))
       }
       if (flags.packet) {
-        const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
+        const project = flags.path ? byPath(db, flags.path) : null
         return print(packet(db, {
           projectId: project ? project.id : null,
           since: flags.since || new Date(Date.now() - 86400000).toISOString()
@@ -261,7 +280,11 @@ export function run(argv) {
       }
       if (flags.apply) {
         const planned = consolidate(db, readCandidates(flags.apply))
-        const staged = stage(db, { candidates: planned.proposals, since: flags.since || null })
+        const staged = stage(db, {
+          candidates: planned.proposals,
+          since: flags.since || null,
+          minPrevalence: minPrevalenceFlag(flags)
+        })
         const applied = apply(db, staged.runId, { projection })
         return print({ ...staged, merged_candidates: planned.merged, ...applied })
       }
@@ -273,7 +296,6 @@ export function run(argv) {
         for (const project of targets) {
           report.organized.push(organize(db, { projectId: project.id, dir: flags.dir || null, projection }))
         }
-        const promotion = proposePromotions(db)
         const pruning = decay(db, { archiveDays: flags.archiveDays ? Number(flags.archiveDays) : 30 })
         const archived = archiveStale(db, flags.archiveDays ? Number(flags.archiveDays) : 30)
         for (const project of targets) {
@@ -286,7 +308,7 @@ export function run(argv) {
             projection
           }))
         }
-        return print({ ...report, promotion, ...pruning, archived })
+        return print({ ...report, ...pruning, archived })
       }
       throw new Error("usage: mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | failures | review RUN | apply RUN | reject RUN | revert RUN | verify | organize | enrich | --apply FILE | --auto")
     }
@@ -354,6 +376,12 @@ function projectionFlag(flags) {
   return undefined
 }
 
+function minPrevalenceFlag(flags) {
+  const value = flags["min-prevalence"] ?? flags.minPrevalence
+  if (value === undefined || value === true) return 1
+  return Number(value)
+}
+
 function textArg(flags, rest) {
   const value = flags.body || rest.join(" ") || readStdin()
   if (!value) throw new Error("no body given (pass --body, positionally, or on stdin)")
@@ -387,6 +415,12 @@ function readText(source) {
   return fs.readFileSync(path.resolve(source), "utf8")
 }
 
+function diaryArg(value) {
+  if (!value || value === true) return null
+  const file = path.resolve(value)
+  return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : String(value)
+}
+
 function readStdin() {
   if (process.stdin.isTTY) return null
   try {
@@ -406,7 +440,7 @@ function usage() {
     "mem init",
     "mem register [path]",
     "mem projects",
-    "mem session start|end|diary|tool|ingest [--id ID] [--diary FILE] [--learn FILE]",
+    "mem session start|end|diary|import|tool|ingest [--id ID] [--diary FILE] [--learn FILE] [--path DIR]",
     "mem draft add|list|commit|drop [ID] --session ID",
     "mem steering [init] [--path DIR]",
     "mem remember --body TEXT [--topic deploy] [--kind gotcha] [--scope project]",

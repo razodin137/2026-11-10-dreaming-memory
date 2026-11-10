@@ -10,7 +10,7 @@ import { enrich } from "../src/enrich.js"
 import { remember, recall, recordUse, decay } from "../src/notes.js"
 import { organize } from "../src/organize.js"
 import { byId, register } from "../src/projects.js"
-import { end, start } from "../src/sessions.js"
+import { end, importSession, start } from "../src/sessions.js"
 import { recordNote } from "../src/topics.js"
 import { ingest as ingestToolCalls, record as recordToolCall, recurring } from "../src/toolcalls.js"
 import { checkClaim, verify } from "../src/verify.js"
@@ -139,7 +139,7 @@ test("collect proposes a merge when a repeated claim already exists", () => {
   const row = db.prepare("SELECT * FROM staged WHERE run_id = ?").get(collected.runId)
   assert.equal(row.op, "merge")
   assert.equal(row.target_id, existing.id)
-  assert.match(row.prevalence, /seen in 2 sessions/)
+  assert.equal(row.prevalence, "2 of 2 sessions")
 
   const applied = apply(db, collected.runId)
   assert.equal(applied.inserted, 0)
@@ -404,6 +404,124 @@ test("a transcript's tool calls and results are read as failures", () => {
   assert.equal(result.failed[0].command, "make build-frontend")
   assert.match(result.failed[0].output, /stale assets/)
   assert.equal(recurring(db, { projectId: alpha.id, minSessions: 1 }).length, 1)
+})
+
+test("a mined session gets a row and only a distilling pass marks it done", () => {
+  const db = fresh()
+  const alpha = project(db, `repair-mined-${Date.now()}`)
+
+  const staged = stage(db, {
+    since: null,
+    candidates: [
+      {
+        op: "insert",
+        project: alpha.slug,
+        topic: "deploy",
+        kind: "gotcha",
+        body: "bin/setup needs redis on 6379",
+        session: "mined-1",
+        examples: [ { session: "mined-1", excerpt: "setup failed until redis started" } ]
+      }
+    ]
+  })
+
+  const mined = db.prepare("SELECT * FROM sessions WHERE id = ?").get("mined-1")
+  assert.ok(mined)
+  assert.equal(mined.project_id, alpha.id)
+  assert.ok(mined.started_at)
+  assert.match(mined.diary, /redis/)
+  assert.equal(mined.distilled_at, null)
+
+  apply(db, staged.runId)
+  assert.ok(db.prepare("SELECT distilled_at FROM sessions WHERE id = ?").get("mined-1").distilled_at)
+})
+
+test("an imported transcript keeps its project, start time, and diary", () => {
+  const db = fresh()
+  const alpha = project(db, `repair-import-${Date.now()}`)
+
+  const imported = importSession(db, {
+    id: "old-1",
+    dir: alpha.path,
+    startedAt: "2026-11-01T00:00:00.000Z",
+    endedAt: "2026-11-01T01:00:00.000Z",
+    diary: "make build-frontend served stale assets"
+  })
+
+  assert.equal(imported.project_id, alpha.id)
+  assert.equal(imported.started_at, "2026-11-01T00:00:00.000Z")
+  assert.match(imported.diary, /stale assets/)
+  assert.equal(imported.distilled_at, null)
+})
+
+test("the packet puts every project's notes and every diary in one store-wide context", () => {
+  const db = fresh()
+  const alpha = project(db, `repair-store-a-${Date.now()}`)
+  const beta = project(db, `repair-store-b-${Date.now()}`)
+  sessionAt(db, "s-a", alpha.path, "2026-11-09T01:00:00.000Z", "alpha learned redis")
+  sessionAt(db, "s-b", beta.path, "2026-11-09T02:00:00.000Z", "beta learned sqlite")
+  remember(db, { projectId: alpha.id, topic: "deploy", body: "alpha deploy needs redis" })
+  remember(db, { projectId: beta.id, topic: "database", body: "beta uses sqlite" })
+
+  const report = packet(db, { since: "2026-11-09T00:00:00.000Z" })
+
+  assert.equal(report.scope, "store")
+  assert.equal(report.store.diaries.length, 2)
+  assert.deepEqual(report.store.diaries.map((diary) => diary.project).sort(), [ alpha.slug, beta.slug ])
+  assert.equal(report.store.notes.length, 2)
+  assert.ok(report.instructions.some((line) => /store-wide/i.test(line)))
+  assert.ok(report.instructions.some((line) => /global/i.test(line)))
+})
+
+test("prevalence is counted from the considered sessions instead of the candidate", () => {
+  const db = fresh()
+  const alpha = project(db, `repair-prevalence-${Date.now()}`)
+  for (const id of [ "s-1", "s-2", "s-3" ]) {
+    sessionAt(db, id, alpha.path, `2026-11-09T0${id.slice(-1)}:00:00.000Z`, "make build-frontend served stale assets")
+  }
+
+  const staged = stage(db, {
+    since: null,
+    candidates: [
+      {
+        op: "insert",
+        project: alpha.slug,
+        topic: "build",
+        kind: "gotcha",
+        body: "make build-frontend served stale assets",
+        session: "s-1",
+        prevalence: "99 of 100 sessions"
+      }
+    ]
+  })
+
+  const row = db.prepare("SELECT prevalence FROM staged WHERE run_id = ?").get(staged.runId)
+  assert.equal(row.prevalence, "3 of 3 sessions")
+})
+
+test("a proposal below the prevalence threshold is dropped", () => {
+  const db = fresh()
+  const alpha = project(db, `repair-threshold-${Date.now()}`)
+  sessionAt(db, "s-1", alpha.path, "2026-11-09T01:00:00.000Z", "one session saw a flaky redis connection")
+
+  const staged = stage(db, {
+    since: null,
+    minPrevalence: 2,
+    candidates: [
+      {
+        op: "insert",
+        project: alpha.slug,
+        topic: "flaky-tests",
+        kind: "gotcha",
+        body: "a flaky redis connection",
+        session: "s-1"
+      }
+    ]
+  })
+
+  assert.equal(staged.staged, 0)
+  assert.equal(staged.skipped.length, 1)
+  assert.match(staged.skipped[0].reason, /prevalence below 2/)
 })
 
 test("the steering file reaches the session writer and the dream", () => {

@@ -145,6 +145,7 @@ one() {
     echo "invalid JSON $id (moved to $target.bad)" >&2
     return 0
   fi
+  $MEM session import --id "$id" --path "$run_dir" --diary "$target" > /dev/null 2>&1 || true
   echo "wrote $count candidates from $id"
 }
 

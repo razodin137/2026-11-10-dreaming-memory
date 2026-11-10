@@ -9,7 +9,7 @@ import {
 import { byId, bySlug, resolve as resolveProject } from "./projects.js"
 import { markDistilled, undistilled } from "./sessions.js"
 import { projectionEnabled, INDEX, files, readTopic, syncTopics } from "./topics.js"
-import { clearer, sameClaim, similarity } from "./text.js"
+import { clearer, mentions, sameClaim, similarity } from "./text.js"
 import { topicKey } from "./subjects.js"
 import { dropper, read as readSteering } from "./steering.js"
 import { forSession as toolCallsFor, failures as toolFailures, recurring as toolRecurring } from "./toolcalls.js"
@@ -29,7 +29,7 @@ export const CANDIDATE_SCHEMA = {
   replaces: "note ids this proposal absorbs, so a merge names everything it replaces",
   reason: "why this candidate exists",
   examples: "array of { session, excerpt } showing the pattern",
-  prevalence: "how often it happened, e.g. \"7 of 23 sessions\""
+  prevalence: "computed from the considered sessions by mem; do not guess it"
 }
 
 export function packet(db, { projectId = null, since, limit = 40 } = {}) {
@@ -57,33 +57,78 @@ export function packet(db, { projectId = null, since, limit = 40 } = {}) {
     group.failures = project ? toolFailures(db, { projectId: project.id, limit: 40 }) : [ ]
     group.recurring = project ? toolRecurring(db, { projectId: project.id }) : [ ]
   }
+  const store = {
+    projects: db.prepare("SELECT id, slug, path, status FROM projects ORDER BY slug").all(),
+    notes: allNotes(db, projectId),
+    diaries: scoped.map((session) => ({
+      session: session.id,
+      project: session.project_slug || null,
+      started_at: session.started_at,
+      ended_at: session.ended_at,
+      diary: session.diary,
+      tool_calls: toolCallsFor(db, { sessionId: session.id })
+    })),
+    files: Array.from(groups.values()).flatMap((entry) => entry.files),
+    failures: toolFailures(db, { limit: 100 }),
+    recurring: toolRecurring(db),
+    steering: readSteering(null)
+  }
   return {
     generated_at: now(),
     since,
+    scope: projectId ? "project" : "store",
     instructions: [
+      "This is one store-wide synthesis pass. Read every project's notes and every diary in the same context.",
       "Synthesize the diaries and tool calls into a diff, not a pile of new notes.",
       "Read the current topic files in `files`; prefer merging into an existing note over adding a near-duplicate.",
       "Every body must be checkable: a path, a command, a version, or a specific gotcha.",
       "Read tool_calls, failures, and recurring: a command that failed and the error behind it outranks prose.",
       "Prefer one lesson from a repeated claim over one note per session; name what it replaces.",
       "Reject anything that only restates what the code already makes obvious.",
-      "Set scope=global only for claims that hold across repositories; sessions cannot write global directly.",
+      "Decide scope yourself: a lesson learned in one project belongs to that project unless it holds across repositories, then global.",
       "Cite the session id or file:line in provenance.",
       "Set session to the id of the session each candidate came from so collect can attribute it.",
       "Set topic to the subject file this claim belongs in, e.g. deploy, flaky-tests, repo-layout.",
-      "For every candidate, list examples ({ session, excerpt }), state its prevalence, and follow the steering file."
+      "List examples ({ session, excerpt }) and follow the steering file; mem computes prevalence from the considered sessions."
     ],
     candidate_schema: CANDIDATE_SCHEMA,
     projects: Array.from(groups.values()),
+    store,
+    notes: store.notes,
+    diaries: store.diaries,
     sessions: scoped.map((session) => session.id)
   }
 }
 
-export function stage(db, { candidates, since, sessionId = null, sourceFork = null, sourcePath = null, steering = null }) {
+function allNotes(db, projectId = null) {
+  const rows = projectId
+    ? db.prepare(`
+      SELECT n.*, p.slug AS project_slug FROM notes n
+      LEFT JOIN projects p ON p.id = n.project_id
+      WHERE n.retired_at IS NULL AND (n.scope = 'global' OR n.project_id = ?)
+      ORDER BY n.topic, n.confidence DESC, n.id
+    `).all(projectId)
+    : db.prepare(`
+      SELECT n.*, p.slug AS project_slug FROM notes n
+      LEFT JOIN projects p ON p.id = n.project_id
+      WHERE n.retired_at IS NULL
+      ORDER BY p.slug, n.topic, n.confidence DESC, n.id
+    `).all()
+  return rows
+}
+
+export function stage(db, {
+  candidates, since, sessionId = null, sourceFork = null, sourcePath = null, steering = null,
+  minPrevalence = 1, considered = null
+}) {
   const problems = [ ]
   const skipped = [ ]
   let stagedCount = 0
   let runId = null
+  const dreamCandidates = candidates.filter((candidate) => candidate && !candidate.verb)
+  const verbCandidates = candidates.filter((candidate) => candidate && candidate.verb)
+  const planned = dreamCandidates.length > 0 ? consolidate(db, dreamCandidates) : { proposals: [ ], skipped: [ ], merged: 0 }
+  const queue = [ ...planned.proposals, ...verbCandidates ]
 
   transaction(db, () => {
     runId = Number(db.prepare(
@@ -93,7 +138,7 @@ export function stage(db, { candidates, since, sessionId = null, sourceFork = nu
       INSERT INTO staged (run_id, op, verb, project_slug, scope, topic, kind, body, confidence, provenance, target_id, target_version, reason, examples, prevalence, replaces, session_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
-    for (const [ index, candidate ] of candidates.entries()) {
+    for (const [ index, candidate ] of queue.entries()) {
       const error = validate(candidate)
       if (error) {
         problems.push({ index, error })
@@ -107,6 +152,8 @@ export function stage(db, { candidates, since, sessionId = null, sourceFork = nu
         problems.push({ index, error: "project note has no project" })
         continue
       }
+      const sessionOwners = new Set([ owner, ...asList(candidate.sessions) ].filter(Boolean))
+      for (const session of sessionOwners) ensureSession(db, { id: session, project, candidate })
       const steer = typeof steering === "function"
         ? steering
         : steering && typeof steering.drops === "function"
@@ -114,6 +161,12 @@ export function stage(db, { candidates, since, sessionId = null, sourceFork = nu
           : dropper(project)
       if (steer(candidate.body)) {
         skipped.push({ index, reason: "steering: this claim is not worth remembering" })
+        continue
+      }
+      const estimated = candidate.verb ? null : countPrevalence(db, candidate, considered)
+      const counted = estimated && estimated.total > 0 ? estimated : null
+      if (counted && counted.count < minPrevalence && candidate.op !== "retire") {
+        skipped.push({ index, reason: `prevalence below ${minPrevalence}: ${counted.label}` })
         continue
       }
       insert.run(
@@ -131,7 +184,7 @@ export function stage(db, { candidates, since, sessionId = null, sourceFork = nu
         candidate.target_version ?? null,
         candidate.reason || null,
         encodeExamples(candidate.examples),
-        candidate.prevalence ? String(candidate.prevalence) : null,
+        counted ? counted.label : candidate.prevalence ? String(candidate.prevalence) : null,
         encodeExamples(candidate.replaces),
         owner
       )
@@ -144,7 +197,14 @@ export function stage(db, { candidates, since, sessionId = null, sourceFork = nu
     }
   })
 
-  return { runId, staged: stagedCount, problems, skipped, since }
+  return {
+    runId,
+    staged: stagedCount,
+    problems,
+    skipped: [ ...planned.skipped, ...skipped ],
+    merged: planned.merged,
+    since
+  }
 }
 
 export function resolveCandidateProject(db, candidate, sessionId = null) {
@@ -163,6 +223,56 @@ export function resolveCandidateProject(db, candidate, sessionId = null) {
     if (session && session.project_id) return byId(db, session.project_id)
   }
   return null
+}
+
+function ensureSession(db, { id, project, candidate }) {
+  const existing = db.prepare("SELECT * FROM sessions WHERE id = ?").get(id)
+  const diary = candidate.diary || candidateDiary(candidate)
+  if (existing) {
+    const projectId = existing.project_id || (project ? project.id : null)
+    const nextDiary = existing.diary && String(existing.diary).trim() ? existing.diary : diary
+    db.prepare("UPDATE sessions SET project_id = ?, diary = ? WHERE id = ?").run(projectId, nextDiary, id)
+    return
+  }
+  db.prepare(`
+    INSERT INTO sessions (id, project_id, started_at, ended_at, diary)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    id,
+    project ? project.id : null,
+    candidate.started_at || candidate.startedAt || now(),
+    candidate.ended_at || candidate.endedAt || null,
+    diary
+  )
+}
+
+function candidateDiary(candidate) {
+  const lines = [ ]
+  for (const example of asList(decodeExamples(candidate.examples))) {
+    if (typeof example === "string") lines.push(example)
+    else if (example && example.excerpt) lines.push(String(example.excerpt))
+  }
+  if (candidate.reason) lines.push(String(candidate.reason))
+  if (candidate.body) lines.push(String(candidate.body))
+  return lines.join("\n") || null
+}
+
+function countPrevalence(db, candidate, considered) {
+  const sessions = considered || db.prepare(`
+    SELECT s.id, s.diary, (
+      SELECT GROUP_CONCAT(t.command || ' ' || COALESCE(t.output, ''), ' ')
+      FROM tool_calls t WHERE t.session_id = s.id
+    ) AS tools
+    FROM sessions s
+  `).all()
+  const contributors = new Set([ ...asList(candidate.sessions), candidate.session, candidate.session_id ].filter(Boolean))
+  let count = 0
+  for (const session of sessions) {
+    if (contributors.has(session.id) || mentions(candidate.body || "", `${session.diary || ""}\n${session.tools || ""}`)) {
+      count += 1
+    }
+  }
+  return { count, total: sessions.length, label: `${count} of ${sessions.length} sessions` }
 }
 
 export function fork(db, { out = null } = {}) {
@@ -255,7 +365,7 @@ export function propose(db, { sessionId = null, candidates }) {
   return stage(db, { candidates: attributed, since: null, sessionId })
 }
 
-export function collect(db, sourcePath) {
+export function collect(db, sourcePath, { minPrevalence = 1 } = {}) {
   if (!sourcePath || sourcePath === true) throw new Error("missing MEM_OUT path")
   const source = path.resolve(sourcePath)
   if (!fs.existsSync(source)) throw new Error(`dream copy not found: ${source}`)
@@ -281,19 +391,28 @@ export function collect(db, sourcePath) {
     `).all()
     const reduced = reduceStaged(rows)
     const planned = consolidate(db, reduced.proposals)
+    const considered = copy.prepare(`
+      SELECT s.id, s.diary, (
+        SELECT GROUP_CONCAT(t.command || ' ' || COALESCE(t.output, ''), ' ')
+        FROM tool_calls t WHERE t.session_id = s.id
+      ) AS tools
+      FROM sessions s
+    `).all()
     const staged = stage(db, {
       candidates: planned.proposals,
       since: null,
       sourceFork: forkId,
-      sourcePath: source
+      sourcePath: source,
+      minPrevalence,
+      considered
     })
 
     return {
       ...staged,
       already: false,
-      skipped: reduced.skipped.length + planned.skipped.length,
+      skipped: reduced.skipped.length + planned.skipped.length + staged.skipped.length,
       superseded: reduced.superseded.length,
-      skipped_rows: [ ...reduced.skipped, ...planned.skipped ],
+      skipped_rows: [ ...reduced.skipped, ...planned.skipped, ...staged.skipped ],
       superseded_rows: reduced.superseded,
       merged: planned.merged
     }
@@ -386,15 +505,21 @@ function sameGroup(left, right) {
 
 function mergeCandidate(into, from) {
   if (clearer(from.body, into.body)) into.body = from.body
-  into.confidence = Math.max(into.confidence, from.confidence)
+  into.confidence = Math.max(Number(into.confidence ?? 0.5), Number(from.confidence ?? 0.5))
   into.provenance = mergeText(into.provenance, from.provenance)
   into.examples = mergeExamples(into.examples, from.examples)
   into.prevalence = from.prevalence || into.prevalence
   into.reason = from.reason || into.reason
   into.topic = from.topic || into.topic
   into.replaces = Array.from(new Set([ ...asList(into.replaces), ...asList(from.replaces) ]))
-  into.session = from.session
-  into.sessions = Array.from(new Set([ ...into.sessions, ...from.sessions ]))
+  into.session = from.session || into.session
+  const sessions = [
+    ...asList(into.sessions),
+    ...asList(from.sessions),
+    into.session,
+    from.session
+  ].filter(Boolean)
+  into.sessions = Array.from(new Set(sessions))
 }
 
 function asList(value) {
@@ -798,10 +923,11 @@ export function revert(db, runId, { projection = projectionEnabled() } = { }) {
       try {
         recordRevision(db, note, { runId, cause: "revert", reason: `reverting run ${runId}` })
         db.prepare(`
-          UPDATE notes SET body = ?, fingerprint = ?, scope = ?, topic = ?, kind = ?, confidence = ?,
+          UPDATE notes SET project_id = ?, body = ?, fingerprint = ?, scope = ?, topic = ?, kind = ?, confidence = ?,
             provenance = ?, retired_at = ?, verify_result = NULL, updated_at = ?, version = version + 1
           WHERE id = ?
         `).run(
+          revision.project_id,
           revision.body,
           revision.fingerprint,
           revision.scope,
@@ -897,7 +1023,8 @@ function applyOne(db, row, counts, runId) {
       confidence: row.confidence,
       provenance: row.provenance,
       examples: decodeExamples(row.examples),
-      prevalence: row.prevalence
+      prevalence: row.prevalence,
+      sessionId: row.session_id
     }, { allowGlobal: true })
     if (result.created) counts.inserted += 1
     else counts.merged += 1
@@ -1021,6 +1148,7 @@ function applyPromotion(db, row, counts, runId, project) {
   ).get(kind, fingerprint(body))
 
   if (existing) {
+    recordRevision(db, existing, { runId, cause: "promote", reason: row.reason || "promoted from projects" })
     db.prepare(`
       UPDATE notes SET confidence = ?, provenance = ?, topic = ?, examples = COALESCE(?, examples),
         updated_at = ?, version = version + 1

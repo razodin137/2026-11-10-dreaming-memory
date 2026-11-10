@@ -15,7 +15,7 @@ mkdir -p .scratch
 
 MEM="${MEM:-node bin/mem.js}"
 SINCE="${1:-${SINCE:-$(date -u -d 'yesterday' +%Y-%m-%dT%H:%M:%SZ)}}"
-MODE="${MODE:-fanout}"
+MODE="${MODE:-single}"
 PARALLEL="${PARALLEL:-4}"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-600}"
 WORK=.scratch/dream
