@@ -3,7 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 import test from "node:test"
 import { DatabaseSync } from "node:sqlite"
-import { migrate } from "../src/db.js"
+import { SCHEMA_PATH, migrate } from "../src/db.js"
 import { materialize } from "../src/materialize.js"
 import { decay, promote, recall, remember } from "../src/notes.js"
 import { register } from "../src/projects.js"
@@ -21,6 +21,34 @@ function project(db, name) {
   return register(db, dir)
 }
 
+function staleRead(db, beforeWrite) {
+  return new Proxy(db, {
+    get(target, property) {
+      if (property !== "prepare") {
+        const value = target[property]
+        return typeof value === "function" ? value.bind(target) : value
+      }
+      return (sql) => {
+        const statement = target.prepare(sql)
+        if (!sql.includes("IFNULL(project_id, 0) = ?")) return statement
+        return new Proxy(statement, {
+          get(stmt, key) {
+            if (key === "get") {
+              return (...args) => {
+                const row = stmt.get(...args)
+                if (row) beforeWrite(row)
+                return row
+              }
+            }
+            const value = stmt[key]
+            return typeof value === "function" ? value.bind(stmt) : value
+          }
+        })
+      }
+    }
+  })
+}
+
 test("remember dedupes on normalized body", () => {
   const db = fresh()
   const first = project(db, "alpha")
@@ -31,6 +59,73 @@ test("remember dedupes on normalized body", () => {
   assert.equal(a.id, b.id)
   const count = db.prepare("SELECT COUNT(*) AS n FROM notes").get().n
   assert.equal(count, 1)
+})
+
+test("remember retries and merges after a competing write", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  const { id } = remember(db, {
+    projectId: alpha.id,
+    body: "redis listens on 6379",
+    provenance: "s1",
+    confidence: 0.5
+  })
+
+  let raced = false
+  const racing = staleRead(db, (row) => {
+    if (raced) return
+    raced = true
+    db.prepare("UPDATE notes SET confidence = 0.8, provenance = ?, version = version + 1 WHERE id = ?")
+      .run("s1 | s2", row.id)
+  })
+
+  const result = remember(racing, {
+    projectId: alpha.id,
+    body: "Redis listens on 6379",
+    provenance: "s3",
+    confidence: 0.5
+  })
+
+  assert.equal(result.id, id)
+  assert.equal(result.created, false)
+  const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(id)
+  assert.equal(note.version, 3)
+  assert.equal(Number(note.confidence.toFixed(2)), 0.85)
+  assert.equal(note.provenance, "s1 | s2 | s3")
+})
+
+test("remember gives up loudly when the note keeps changing", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  const { id } = remember(db, { projectId: alpha.id, body: "port 6379", provenance: "s1" })
+
+  let attempts = 0
+  const racing = staleRead(db, (row) => {
+    attempts += 1
+    db.prepare("UPDATE notes SET version = version + 1 WHERE id = ?").run(row.id)
+  })
+
+  assert.throws(
+    () => remember(racing, { projectId: alpha.id, body: "port 6379", provenance: "s2" }),
+    /note write conflicted 3 times/
+  )
+  assert.equal(attempts, 3)
+  assert.equal(db.prepare("SELECT version FROM notes WHERE id = ?").get(id).version, 4)
+})
+
+test("migrate adds a version column to an existing database", () => {
+  const legacy = fs.readFileSync(SCHEMA_PATH, "utf8")
+    .replace("  version INTEGER NOT NULL DEFAULT 1,\n", "")
+  const db = new DatabaseSync(":memory:")
+  db.exec(legacy)
+  db.prepare(`
+    INSERT INTO notes (scope, kind, body, fingerprint, provenance, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run("global", "fact", "old note", "old note", "", "2026-01-01", "2026-01-01")
+
+  migrate(db)
+
+  assert.equal(db.prepare("SELECT version FROM notes").get().version, 1)
 })
 
 test("recall is scoped and records hits", () => {

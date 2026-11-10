@@ -17,7 +17,14 @@ export function open(dbPath = DEFAULT_DB) {
 
 export function migrate(db) {
   db.exec(fs.readFileSync(SCHEMA_PATH, "utf8"))
+  addColumn(db, "notes", "version", "INTEGER NOT NULL DEFAULT 1")
   return db
+}
+
+function addColumn(db, table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all()
+  if (columns.some((entry) => entry.name === column)) return
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
 }
 
 export function init(dbPath = DEFAULT_DB) {

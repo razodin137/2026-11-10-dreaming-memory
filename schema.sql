@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS notes (
   confidence REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
   hits INTEGER NOT NULL DEFAULT 0,
   provenance TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   last_hit_at TEXT,

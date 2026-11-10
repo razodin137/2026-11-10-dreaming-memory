@@ -134,8 +134,10 @@ function applyOne(db, row, counts) {
   }
   if (row.op === "update") {
     if (!row.target_id) throw new Error("update requires target_id")
-    const result = db.prepare("UPDATE notes SET body = ?, fingerprint = ?, confidence = ?, updated_at = ? WHERE id = ?")
-      .run(row.body, fingerprint(row.body), row.confidence, now(), row.target_id)
+    const result = db.prepare(`
+      UPDATE notes SET body = ?, fingerprint = ?, confidence = ?, updated_at = ?, version = version + 1
+      WHERE id = ?
+    `).run(row.body, fingerprint(row.body), row.confidence, now(), row.target_id)
     if (Number(result.changes) === 0) throw new Error(`update target ${row.target_id} not found`)
     counts.updated += 1
     return

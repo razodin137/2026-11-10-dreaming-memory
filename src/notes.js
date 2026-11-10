@@ -6,34 +6,55 @@ export const SCOPES = [ "project", "global" ]
 const HALF_LIFE_DAYS = 45
 const RETIRE_BELOW = 0.05
 const PROMOTE_MIN_PROJECTS = 2
+const MAX_WRITE_ATTEMPTS = 3
 
 export function remember(db, note) {
   const scope = note.scope || "project"
   const kind = note.kind || "fact"
   const confidence = clamp(note.confidence ?? 0.5)
-  const stamp = now()
   const print = fingerprint(note.body)
 
   if (!print) {
     throw new Error("note body is empty after normalization")
   }
 
-  const existing = db.prepare(`
-    SELECT * FROM notes
-    WHERE scope = ? AND IFNULL(project_id, 0) = ? AND kind = ? AND fingerprint = ? AND retired_at IS NULL
-  `).get(scope, scope === "global" ? 0 : note.projectId, kind, print)
+  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
+    const existing = db.prepare(`
+      SELECT * FROM notes
+      WHERE scope = ? AND IFNULL(project_id, 0) = ? AND kind = ? AND fingerprint = ? AND retired_at IS NULL
+    `).get(scope, scope === "global" ? 0 : note.projectId, kind, print)
 
-  if (existing) {
-    db.prepare(`
-      UPDATE notes SET confidence = MIN(1, MAX(confidence, ?) + 0.05), updated_at = ?, provenance = ?
-      WHERE id = ?
-    `).run(confidence, stamp, mergeProvenance(existing.provenance, note.provenance), existing.id)
-    return { id: existing.id, created: false }
+    const result = existing
+      ? mergeNote(db, existing, confidence, note.provenance, now())
+      : insertNote(db, note, scope, kind, print, confidence, now())
+
+    if (result) return result
   }
 
+  const error = new Error(`note write conflicted ${MAX_WRITE_ATTEMPTS} times; giving up: ${print}`)
+  error.code = "NOTE_WRITE_CONFLICT"
+  throw error
+}
+
+function mergeNote(db, existing, confidence, provenance, stamp) {
   const result = db.prepare(`
-    INSERT INTO notes (project_id, scope, kind, body, fingerprint, confidence, provenance, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    UPDATE notes
+    SET confidence = MIN(1, MAX(confidence, ?) + 0.05),
+        updated_at = ?,
+        provenance = ?,
+        version = version + 1
+    WHERE id = ? AND version = ?
+  `).run(confidence, stamp, mergeProvenance(existing.provenance, provenance), existing.id, existing.version)
+
+  if (Number(result.changes) === 0) return null
+  return { id: existing.id, created: false }
+}
+
+function insertNote(db, note, scope, kind, print, confidence, stamp) {
+  const result = db.prepare(`
+    INSERT INTO notes (project_id, scope, kind, body, fingerprint, confidence, provenance, created_at, updated_at, version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    ON CONFLICT DO NOTHING
   `).run(
     scope === "global" ? null : note.projectId,
     scope,
@@ -46,6 +67,7 @@ export function remember(db, note) {
     stamp
   )
 
+  if (Number(result.changes) === 0) return null
   return { id: Number(result.lastInsertRowid), created: true }
 }
 
