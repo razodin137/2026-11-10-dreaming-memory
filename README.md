@@ -49,6 +49,10 @@ untouched until a run is applied.
 project, kind, note text, confidence, the note it would merge into or replace, and the
 evidence and prevalence behind it. Review is read-only; nothing is applied.
 
+`mem dream apply RUN` commits the proposals in that run. `mem dream reject RUN` throws the
+batch away instead; live memory stays untouched. A run can only be rejected while none of
+its proposals have been applied.
+
 **Every changed note leaves its previous self behind.** Before an update or promotion
 changes a note's body or scope, the old row is copied into `note_revisions` with the dream
 run that caused it. `mem revisions --note 42` shows what a note said before each change.
@@ -69,6 +73,16 @@ mem dream --auto
 
 `mem dream --auto` promotes cross-project notes, decays unused ones, and archives
 directories untouched for 30 days.
+
+`--apply` is the straight-through path cron uses: stage and commit in one invocation. For
+an interactive night, stop after staging and accept or reject the run yourself:
+
+```sh
+mem dream stage .scratch/candidates.json   # prints the run id
+mem dream review 7
+mem dream apply 7                          # commit it
+mem dream reject 7                         # or throw it away
+```
 
 ```cron
 0 3 * * * cd ~/src/dreaming-memory && ./scripts/dream.sh >> .scratch/dream.log 2>&1

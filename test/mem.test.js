@@ -8,7 +8,7 @@ import { SCHEMA_PATH, migrate } from "../src/db.js"
 import { materialize } from "../src/materialize.js"
 import { decay, promote, recall, remember } from "../src/notes.js"
 import { register } from "../src/projects.js"
-import { apply, formatReview, review, stage } from "../src/dream.js"
+import { apply, formatReview, reject, review, stage } from "../src/dream.js"
 
 const SCRATCH = path.join(import.meta.dirname, "..", ".scratch")
 
@@ -348,6 +348,149 @@ test("mem dream review prints a human-readable diff and applies nothing", () => 
   const db = new DatabaseSync(dbPath)
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 0)
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM staged WHERE applied_at IS NOT NULL").get().n, 0)
+  db.close()
+})
+
+test("dream apply commits a reviewed run and is idempotent", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  const staged = stage(db, {
+    since: null,
+    candidates: [
+      { op: "insert", project: alpha.slug, kind: "gotcha", body: "bin/setup needs redis running", provenance: "s1" }
+    ]
+  })
+
+  assert.equal(review(db, staged.runId).pending, 1)
+
+  const result = apply(db, staged.runId)
+  assert.equal(result.inserted, 1)
+  assert.equal(result.applied, 1)
+  assert.equal(result.pending, 0)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 1)
+  assert.equal(review(db, staged.runId).pending, 0)
+
+  const again = apply(db, staged.runId)
+  assert.equal(again.inserted, 0)
+  assert.equal(again.pending, 0)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 1)
+})
+
+test("dream reject discards a run and blocks a later apply", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  const staged = stage(db, {
+    since: null,
+    candidates: [
+      { op: "insert", project: alpha.slug, kind: "gotcha", body: "bin/setup needs redis running", provenance: "s1" }
+    ]
+  })
+
+  const result = reject(db, staged.runId)
+  assert.equal(result.rejected, true)
+  assert.equal(result.already, undefined)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 0)
+  assert.ok(db.prepare("SELECT rejected_at FROM dream_runs WHERE id = ?").get(staged.runId).rejected_at)
+
+  const report = review(db, staged.runId)
+  assert.equal(report.pending, 1)
+  assert.ok(report.rejected_at)
+  assert.match(formatReview(report), /rejected/)
+  assert.throws(() => apply(db, staged.runId), /was rejected/)
+  assert.equal(reject(db, staged.runId).already, true)
+})
+
+test("dream reject refuses a run that has already been applied", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  const staged = stage(db, {
+    since: null,
+    candidates: [
+      { op: "insert", project: alpha.slug, kind: "gotcha", body: "bin/setup needs redis running", provenance: "s1" }
+    ]
+  })
+
+  apply(db, staged.runId)
+  assert.throws(() => reject(db, staged.runId), /cannot reject/)
+})
+
+test("mem dream apply and reject act on staged runs", () => {
+  const dir = fs.mkdtempSync(path.join(SCRATCH, "apply-"))
+  const dbPath = path.join(dir, "memory.db")
+  const file = path.join(dir, "candidates.json")
+  const bin = path.join(import.meta.dirname, "..", "bin", "mem.js")
+  fs.writeFileSync(file, JSON.stringify({
+    candidates: [
+      { op: "insert", scope: "global", kind: "fact", body: "node 26 ships node:sqlite", provenance: "s1" }
+    ]
+  }))
+
+  execFileSync(process.execPath, [ bin, "init", "--db", dbPath ], { encoding: "utf8" })
+  const staged = JSON.parse(execFileSync(
+    process.execPath,
+    [ bin, "dream", "stage", file, "--db", dbPath ],
+    { encoding: "utf8" }
+  ))
+
+  const reviewed = execFileSync(
+    process.execPath,
+    [ bin, "dream", "review", String(staged.runId), "--db", dbPath ],
+    { encoding: "utf8" }
+  )
+  assert.match(reviewed, /not applied/)
+
+  const applied = JSON.parse(execFileSync(
+    process.execPath,
+    [ bin, "dream", "apply", String(staged.runId), "--db", dbPath ],
+    { encoding: "utf8" }
+  ))
+  assert.equal(applied.inserted, 1)
+  assert.equal(applied.pending, 0)
+
+  const second = JSON.parse(execFileSync(
+    process.execPath,
+    [ bin, "dream", "stage", file, "--db", dbPath ],
+    { encoding: "utf8" }
+  ))
+  const rejected = JSON.parse(execFileSync(
+    process.execPath,
+    [ bin, "dream", "reject", String(second.runId), "--db", dbPath ],
+    { encoding: "utf8" }
+  ))
+  assert.equal(rejected.rejected, true)
+
+  const db = new DatabaseSync(dbPath)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 1)
+  assert.ok(db.prepare("SELECT rejected_at FROM dream_runs WHERE id = ?").get(second.runId).rejected_at)
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM staged WHERE run_id = ? AND applied_at IS NOT NULL").get(second.runId).n,
+    0
+  )
+  db.close()
+})
+
+test("mem dream --apply keeps the one-shot cron path", () => {
+  const dir = fs.mkdtempSync(path.join(SCRATCH, "apply-"))
+  const dbPath = path.join(dir, "memory.db")
+  const file = path.join(dir, "candidates.json")
+  const bin = path.join(import.meta.dirname, "..", "bin", "mem.js")
+  fs.writeFileSync(file, JSON.stringify({
+    candidates: [
+      { op: "insert", scope: "global", kind: "fact", body: "node 26 ships node:sqlite", provenance: "s1" }
+    ]
+  }))
+
+  execFileSync(process.execPath, [ bin, "init", "--db", dbPath ], { encoding: "utf8" })
+  const output = JSON.parse(execFileSync(
+    process.execPath,
+    [ bin, "dream", "--apply", file, "--db", dbPath ],
+    { encoding: "utf8" }
+  ))
+
+  assert.equal(output.inserted, 1)
+  assert.equal(output.pending, 0)
+  const db = new DatabaseSync(dbPath)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 1)
   db.close()
 })
 

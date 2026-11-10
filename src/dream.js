@@ -98,14 +98,14 @@ export function stage(db, { candidates, since }) {
 }
 
 export function review(db, runId) {
-  const run = db.prepare("SELECT * FROM dream_runs WHERE id = ?").get(runId)
-  if (!run) throw new Error(`dream run ${runId} not found`)
+  const run = requireRun(db, runId)
   const rows = db.prepare("SELECT * FROM staged WHERE run_id = ? ORDER BY id").all(runId)
   const applied = rows.filter((row) => row.applied_at).length
   return {
     runId: Number(runId),
     started_at: run.started_at,
     finished_at: run.finished_at,
+    rejected_at: run.rejected_at || null,
     proposals: rows.length,
     applied,
     pending: rows.length - applied,
@@ -115,9 +115,10 @@ export function review(db, runId) {
 
 export function formatReview(report) {
   const count = `${report.proposals} proposal${report.proposals === 1 ? "" : "s"}`
-  const status = report.pending === 0
-    ? "applied"
-    : report.applied > 0 ? "partially applied" : "not applied"
+  let status = "not applied"
+  if (report.rejected_at) status = "rejected"
+  else if (report.pending === 0) status = "applied"
+  else if (report.applied > 0) status = "partially applied"
   const lines = [ `dream run ${report.runId} — ${count}, ${status}`, "" ]
 
   if (report.changes.length === 0) {
@@ -236,6 +237,9 @@ function formatExamples(examples) {
 }
 
 export function apply(db, runId) {
+  const run = requireRun(db, runId)
+  if (run.rejected_at) throw new Error(`dream run ${runId} was rejected; nothing to apply`)
+
   const rows = db.prepare("SELECT * FROM staged WHERE run_id = ? AND applied_at IS NULL ORDER BY id").all(runId)
   const counts = { inserted: 0, merged: 0, retired: 0, updated: 0 }
   const problems = [ ]
@@ -250,13 +254,61 @@ export function apply(db, runId) {
         problems.push({ staged_id: row.id, error: error.message })
       }
     }
+    const pending = pendingCount(db, runId)
     db.prepare(`
-      UPDATE dream_runs SET finished_at = ?, inserted = ?, merged = ?, retired = ?, promoted = 0, summary = ?
+      UPDATE dream_runs
+      SET finished_at = COALESCE(?, finished_at),
+          inserted = inserted + ?,
+          merged = merged + ?,
+          retired = retired + ?,
+          promoted = 0,
+          summary = ?
       WHERE id = ?
-    `).run(now(), counts.inserted, counts.merged, counts.retired, JSON.stringify({ problems }), runId)
+    `).run(
+      pending === 0 ? now() : null,
+      counts.inserted,
+      counts.merged,
+      counts.retired,
+      JSON.stringify({ problems }),
+      runId
+    )
   })
 
-  return { runId, ...counts, problems }
+  return {
+    runId,
+    ...counts,
+    applied: rows.length - problems.length,
+    pending: pendingCount(db, runId),
+    problems
+  }
+}
+
+export function reject(db, runId) {
+  const run = requireRun(db, runId)
+  const applied = db.prepare(
+    "SELECT COUNT(*) AS n FROM staged WHERE run_id = ? AND applied_at IS NOT NULL"
+  ).get(runId).n
+
+  if (run.rejected_at) return { runId, rejected: true, already: true, applied }
+  if (applied > 0) {
+    throw new Error(`dream run ${runId} has ${applied} applied proposal${applied === 1 ? "" : "s"}; cannot reject`)
+  }
+
+  const stamp = now()
+  db.prepare("UPDATE dream_runs SET rejected_at = ?, finished_at = ? WHERE id = ?").run(stamp, stamp, runId)
+  return { runId, rejected: true, applied: 0, rejected_at: stamp }
+}
+
+function pendingCount(db, runId) {
+  return db.prepare(
+    "SELECT COUNT(*) AS n FROM staged WHERE run_id = ? AND applied_at IS NULL"
+  ).get(runId).n
+}
+
+function requireRun(db, runId) {
+  const run = db.prepare("SELECT * FROM dream_runs WHERE id = ?").get(runId)
+  if (!run) throw new Error(`dream run ${runId} not found`)
+  return run
 }
 
 function applyOne(db, row, counts, runId) {
