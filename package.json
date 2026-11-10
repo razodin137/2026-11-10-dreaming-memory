@@ -1,0 +1,23 @@
+{
+  "name": "mem",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Collective SQLite memory store with a nightly dreaming cycle",
+  "bin": {
+    "mem": "./bin/mem.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0"
+  }
+}

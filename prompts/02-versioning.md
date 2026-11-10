@@ -1,0 +1,2 @@
+2. Keep an old copy of every note you change
+A separate note_revisions table: every time a note's body, kind, or scope changes, the previous version is copied there first, with the dream run or session that caused it. That's the "versioning" half of her guardrails. Practical effect: you can see what a note said last month and why it changed, and reverting a bad night becomes a query rather than a restore-from-backup.
