@@ -20,17 +20,66 @@ mem.db
 ```sh
 node bin/mem.js init
 node bin/mem.js session start --id s-001
-node bin/mem.js remember --kind gotcha --body "bin/setup needs redis on 6379"
+node bin/mem.js remember --topic deploy --kind gotcha --body "bin/setup needs redis on 6379"
 node bin/mem.js recall --limit 5
-node bin/mem.js materialize
+node bin/mem.js sync
 ```
 
 `MEMORY_DB` overrides the database path (default `./memory.db`).
+`MEMORY_DIR` overrides the topic-file directory (default `./memory`).
+
+## One store, two loops
+
+The readable store is a directory of subject files, one per thing a future agent would
+search for:
+
+```text
+memory/
+├── README.md          index
+├── deploy.md          "how this ships"
+├── flaky-tests.md     "what fails intermittently"
+└── repo-layout.md     "where things live"
+```
+
+Every entry keeps its ledger id in an HTML comment, so the markdown and the database stay
+the same note:
+
+```markdown
+- <!-- mem {"id":12,"kind":"gotcha","confidence":0.72,...} --> `bin/deploy` needs `RAILS_ENV`.
+  - Repro: `bin/setup`
+  - Seen: 7 of 23 sessions (s-001, s-004)
+```
+
+**Real-time.** `mem remember` writes the note to the ledger and to the file for its
+`--topic`, through one helper (`recordNote`) that takes a per-file lock and keeps the note
+id. That helper is the only writer, so a nightly rewrite and a live edit queue behind the
+same lock instead of overwriting each other.
+
+**Batch.** Dreaming reads the day's transcripts and the current files. It has three verbs,
+and they are real:
+
+- **verify** — stat every backticked path, read the version claimed for a dependency, and
+  re-run read-only commands. `--execute` also runs any other safe command. True claims
+  keep their place and can gain confidence. False claims are rewritten (when the
+  correction is known) or dropped, with the reason and a revision behind them.
+- **organize** — split a topic that grew past `--split-at`, merge topic names that
+  converged (`deploy`/`deploys`), move a claim to the subject it actually names, and
+  cross-link related files.
+- **enrich** — add what the transcripts taught: the reproducing command, prevalence
+  ("3 of 12 sessions"), and the sessions that showed it.
+
+Only destructive work waits: a verify rewrite/drop, or any other change that removes or
+replaces a claim, is staged and reviewed exactly like a dream run. Splits, moves,
+cross-links, and enrichment land automatically. `mem dream revert RUN` restores the
+previous note for every change the run made.
+
+`mem sync` rebuilds the topic files and the index from the ledger; `mem topics` lists them.
 
 ## The model
 
 **Notes are scoped.** `project` notes belong to one directory; `global` notes are shared.
-Retrieval always reads *this project + global*, never another project's notes.
+Retrieval always reads *this project + global*, never another project's notes. Each note
+also carries a `topic`, the subject file it belongs in.
 
 **Notes carry provenance and confidence.** `body` must be checkable — a path, a command,
 a version, a specific gotcha. "Be careful with migrations" is a failed note.
@@ -66,16 +115,26 @@ run that caused it. `mem revisions --note 42` shows what a note said before each
 # 1. what was learned today, and what is already known
 mem dream --packet --since 2026-11-09T00:00:00Z > .scratch/packet.json
 
-# 2. an agent reads the packet and writes candidates (your model, your prompt)
+# 2. an agent reads the packet, the transcripts, and the current topic files
 agent-of-choice < .scratch/packet.json > .scratch/candidates.json
 
-# 3. deterministic apply + housekeeping
+# 3. deterministic apply, then the three verbs + housekeeping
 mem dream --apply .scratch/candidates.json
 mem dream --auto
 ```
 
-`mem dream --auto` promotes cross-project notes, decays unused ones, and archives
-directories untouched for 30 days.
+`mem dream --auto` runs enrich, organize, and verify for every active project (or the one
+named with `--path`), then promotes cross-project notes, decays unused ones, and archives
+directories untouched for 30 days. Anything verify would drop or rewrite is staged:
+`--auto` does not apply those unattended.
+
+Each verb is also a command of its own:
+
+```sh
+mem dream verify [--execute] [--dir memory]
+mem dream organize [--split-at 20] [--stage]
+mem dream enrich [--since 2026-11-09T00:00:00Z]
+```
 
 `--apply` is the straight-through path cron uses: stage and commit in one invocation. For
 an interactive night, stop after staging and accept or reject the run yourself:
@@ -85,6 +144,7 @@ mem dream stage .scratch/candidates.json   # prints the run id
 mem dream review 7
 mem dream apply 7                          # commit it
 mem dream reject 7                         # or throw it away
+mem dream revert 7                         # undo an applied run
 ```
 
 ### Fan-out nights

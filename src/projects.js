@@ -42,6 +42,10 @@ export function bySlug(db, slug) {
   return db.prepare("SELECT * FROM projects WHERE slug = ?").get(slug) || null
 }
 
+export function byId(db, id) {
+  return db.prepare("SELECT * FROM projects WHERE id = ?").get(id) || null
+}
+
 export function touch(db, projectId) {
   db.prepare("UPDATE projects SET last_seen_at = ? WHERE id = ?").run(now(), projectId)
 }

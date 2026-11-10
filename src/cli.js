@@ -1,11 +1,15 @@
 import fs from "node:fs"
 import path from "node:path"
 import { DEFAULT_DB, init } from "./db.js"
-import { packet, stage, apply, formatReview, reject, review, fork, transcripts, propose, collect } from "./dream.js"
+import { packet, stage, apply, formatReview, reject, revert, review, fork, transcripts, propose, collect } from "./dream.js"
+import { enrich } from "./enrich.js"
 import { materialize } from "./materialize.js"
-import { KINDS, SCOPES, decay, promote, recall, remember, revisions, stats } from "./notes.js"
+import { KINDS, SCOPES, decay, promote, recall, revisions, stats } from "./notes.js"
+import { organize } from "./organize.js"
 import { archiveStale, byPath, list, register } from "./projects.js"
 import { end, start, writeDiary } from "./sessions.js"
+import { recordNote, syncTopics, topicCounts } from "./topics.js"
+import { verify } from "./verify.js"
 
 export function run(argv) {
   const { command, flags, rest } = parse(argv)
@@ -44,15 +48,27 @@ export function run(argv) {
 
     case "remember": {
       const project = register(db, flags.path || cwd)
-      const result = remember(db, {
+      const result = recordNote(db, project, {
         projectId: project.id,
         scope: flags.scope || "project",
+        topic: flags.topic || "general",
         kind: flags.kind || "fact",
         body: textArg(flags, rest),
         confidence: flags.confidence === undefined ? 0.6 : Number(flags.confidence),
         provenance: flags.provenance || project.slug
-      })
+      }, { dir: flags.dir || null })
       return print({ ...result, scope: flags.scope || "project", project: project.slug })
+    }
+
+    case "sync": {
+      const project = flags.path ? register(db, flags.path) : byPath(db, cwd) || register(db, cwd)
+      return print(syncTopics(db, project, { dir: flags.dir || null }))
+    }
+
+    case "topics": {
+      const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
+      if (!project) return print({ topics: [ ] })
+      return print({ project: project.slug, topics: topicCounts(db, project) })
     }
 
     case "recall": {
@@ -105,6 +121,33 @@ export function run(argv) {
       if (rest[0] === "reject") {
         return print(reject(db, Number(require(rest[1], "RUN"))))
       }
+      if (rest[0] === "revert") {
+        return print(revert(db, Number(require(rest[1], "RUN"))))
+      }
+      if (rest[0] === "verify") {
+        const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
+        return print(verify(db, {
+          projectId: project ? project.id : null,
+          execute: Boolean(flags.execute) || process.env.MEM_VERIFY_EXECUTE === "1",
+          dir: flags.dir || null
+        }))
+      }
+      if (rest[0] === "organize") {
+        const project = flags.path ? register(db, flags.path) : byPath(db, cwd) || register(db, cwd)
+        return print(organize(db, {
+          projectId: project.id,
+          dir: flags.dir || null,
+          splitAt: flags.splitAt ? Number(flags.splitAt) : undefined,
+          autoApply: flags.stage ? false : true
+        }))
+      }
+      if (rest[0] === "enrich") {
+        const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
+        return print(enrich(db, {
+          projectId: project ? project.id : null,
+          since: flags.since || null
+        }))
+      }
       if (flags.packet) {
         const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
         return print(packet(db, {
@@ -118,12 +161,26 @@ export function run(argv) {
         return print({ ...staged, ...applied })
       }
       if (flags.auto) {
+        const targets = flags.path
+          ? [ register(db, flags.path) ]
+          : list(db).filter((project) => project.status === "active")
+        const report = { projects: [ ], organized: [ ], enriched: [ ], checked: [ ] }
+        for (const project of targets) report.organized.push(organize(db, { projectId: project.id, dir: flags.dir || null }))
         const promotion = promote(db)
         const pruning = decay(db, { archiveDays: flags.archiveDays ? Number(flags.archiveDays) : 30 })
         const archived = archiveStale(db, flags.archiveDays ? Number(flags.archiveDays) : 30)
-        return print({ ...promotion, ...pruning, archived })
+        for (const project of targets) {
+          report.projects.push(project.slug)
+          report.enriched.push(enrich(db, { projectId: project.id, since: flags.since || null }))
+          report.checked.push(verify(db, {
+            projectId: project.id,
+            execute: Boolean(flags.execute) || process.env.MEM_VERIFY_EXECUTE === "1",
+            dir: flags.dir || null
+          }))
+        }
+        return print({ ...report, ...promotion, ...pruning, archived })
       }
-      throw new Error("usage: mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | review RUN | apply RUN | reject RUN | --apply FILE | --auto")
+      throw new Error("usage: mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | review RUN | apply RUN | reject RUN | revert RUN | verify | organize | enrich | --apply FILE | --auto")
     }
 
     case "promote":
@@ -220,9 +277,10 @@ function usage() {
     "mem register [path]",
     "mem projects",
     "mem session start|end|diary [--id ID] [--diary FILE]",
-    "mem remember --body TEXT [--kind gotcha] [--scope project] [--confidence 0.6]",
+    "mem remember --body TEXT [--topic deploy] [--kind gotcha] [--scope project] [--confidence 0.6]",
     "mem recall [--query TEXT] [--limit 12]",
-    "mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | review RUN [--json] | apply RUN | reject RUN | --apply FILE | --auto",
+    "mem sync | topics",
+    "mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | review RUN [--json] | apply RUN | reject RUN | revert RUN | verify [--execute] | organize [--stage] | enrich [--since DATE] | --apply FILE | --auto",
     "mem revisions [--note ID] [--run RUN] [--limit 50]",
     "mem promote | decay | materialize | stats"
   ].join("\n")

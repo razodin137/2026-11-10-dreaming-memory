@@ -11,6 +11,7 @@ const MAX_WRITE_ATTEMPTS = 3
 export function remember(db, note) {
   const scope = note.scope || "project"
   const kind = note.kind || "fact"
+  const topic = note.topic === undefined || note.topic === null ? null : normalizeTopic(note.topic)
   const confidence = clamp(note.confidence ?? 0.5)
   const print = fingerprint(note.body)
 
@@ -25,8 +26,8 @@ export function remember(db, note) {
     `).get(scope, scope === "global" ? 0 : note.projectId, kind, print)
 
     const result = existing
-      ? mergeNote(db, existing, confidence, note.provenance, now())
-      : insertNote(db, note, scope, kind, print, confidence, now())
+      ? mergeNote(db, existing, confidence, note.provenance, topic, now())
+      : insertNote(db, note, scope, kind, topic || "general", print, confidence, now())
 
     if (result) return result
   }
@@ -36,28 +37,37 @@ export function remember(db, note) {
   throw error
 }
 
-function mergeNote(db, existing, confidence, provenance, stamp) {
+function mergeNote(db, existing, confidence, provenance, topic, stamp) {
   const result = db.prepare(`
     UPDATE notes
     SET confidence = MIN(1, MAX(confidence, ?) + 0.05),
         updated_at = ?,
         provenance = ?,
+        topic = COALESCE(?, topic),
         version = version + 1
     WHERE id = ? AND version = ?
-  `).run(confidence, stamp, mergeProvenance(existing.provenance, provenance), existing.id, existing.version)
+  `).run(
+    confidence,
+    stamp,
+    mergeProvenance(existing.provenance, provenance),
+    topic,
+    existing.id,
+    existing.version
+  )
 
   if (Number(result.changes) === 0) return null
-  return { id: existing.id, created: false }
+  return { id: existing.id, created: false, topic: topic || existing.topic || "general" }
 }
 
-function insertNote(db, note, scope, kind, print, confidence, stamp) {
+function insertNote(db, note, scope, kind, topic, print, confidence, stamp) {
   const result = db.prepare(`
-    INSERT INTO notes (project_id, scope, kind, body, fingerprint, confidence, provenance, created_at, updated_at, version)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    INSERT INTO notes (project_id, scope, topic, kind, body, fingerprint, confidence, provenance, created_at, updated_at, version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     ON CONFLICT DO NOTHING
   `).run(
     scope === "global" ? null : note.projectId,
     scope,
+    topic,
     kind,
     note.body.trim(),
     print,
@@ -68,21 +78,27 @@ function insertNote(db, note, scope, kind, print, confidence, stamp) {
   )
 
   if (Number(result.changes) === 0) return null
-  return { id: Number(result.lastInsertRowid), created: true }
+  return { id: Number(result.lastInsertRowid), created: true, topic }
 }
 
-export function recordRevision(db, note, { runId = null, sessionId = null, cause = "update", at = now() } = {}) {
+export function normalizeTopic(value) {
+  const slug = String(value || "general").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+  return slug || "general"
+}
+
+export function recordRevision(db, note, { runId = null, sessionId = null, cause = "update", reason = null, at = now() } = {}) {
   db.prepare(`
     INSERT INTO note_revisions (
-      note_id, version, project_id, scope, kind, body, fingerprint, confidence,
-      provenance, retired_at, run_id, session_id, cause, updated_at, recorded_at
+      note_id, version, project_id, scope, topic, kind, body, fingerprint, confidence,
+      provenance, retired_at, run_id, session_id, cause, reason, updated_at, recorded_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     note.id,
     note.version,
     note.project_id ?? null,
     note.scope,
+    note.topic || "general",
     note.kind,
     note.body,
     note.fingerprint,
@@ -92,9 +108,23 @@ export function recordRevision(db, note, { runId = null, sessionId = null, cause
     runId,
     sessionId,
     cause,
+    reason,
     note.updated_at,
     at
   )
+}
+
+export function liveNotes(db, { projectId = null, limit = 1000 } = {}) {
+  return db.prepare(`
+    SELECT * FROM notes
+    WHERE retired_at IS NULL AND (scope = 'global' OR project_id = ?)
+    ORDER BY topic, confidence DESC, id ASC
+    LIMIT ?
+  `).all(projectId ?? -1, limit)
+}
+
+export function noteById(db, id) {
+  return db.prepare("SELECT * FROM notes WHERE id = ?").get(id) || null
 }
 
 export function revisions(db, { noteId = null, runId = null, limit = 50 } = {}) {
@@ -177,12 +207,14 @@ export function decay(db, { archiveDays = 30 } = {}) {
   return transaction(db, () => {
     const rows = db.prepare("SELECT * FROM notes WHERE retired_at IS NULL").all()
     const update = db.prepare("UPDATE notes SET confidence = ?, retired_at = ? WHERE id = ?")
+    const retire = db.prepare("UPDATE notes SET confidence = ?, retired_at = ?, version = version + 1 WHERE id = ?")
     let decayed = 0
     let retired = 0
     for (const note of rows) {
       const next = Number(Math.min(note.confidence, score(note, at)).toFixed(4))
       if (next < RETIRE_BELOW) {
-        update.run(next, now(at), note.id)
+        recordRevision(db, note, { cause: "update", reason: "decay: below retirement threshold" })
+        retire.run(next, now(at), note.id)
         retired += 1
       } else if (next < note.confidence) {
         update.run(next, null, note.id)
@@ -223,13 +255,14 @@ export function promote(db) {
       const priorVersion = Math.max(...copies.map((copy) => copy.version))
 
       if (existing) {
-        db.prepare("UPDATE notes SET confidence = ?, hits = MAX(hits, ?), updated_at = ?, version = version + 1 WHERE id = ?")
-          .run(clamp(group.confidence + 0.1), Number(group.hits || 0), now(), existing.id)
+        db.prepare("UPDATE notes SET confidence = ?, hits = MAX(hits, ?), topic = ?, updated_at = ?, version = version + 1 WHERE id = ?")
+          .run(clamp(group.confidence + 0.1), Number(group.hits || 0), source.topic || existing.topic, now(), existing.id)
       } else {
         const result = db.prepare(`
-          INSERT INTO notes (project_id, scope, kind, body, fingerprint, confidence, hits, provenance, version, created_at, updated_at)
-          VALUES (NULL, 'global', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO notes (project_id, scope, topic, kind, body, fingerprint, confidence, hits, provenance, version, created_at, updated_at)
+          VALUES (NULL, 'global', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
+          source.topic || "general",
           group.kind,
           body,
           group.fingerprint,
