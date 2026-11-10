@@ -43,7 +43,9 @@ as deterministic `insert | merge | update | retire` operations, deduped by a nor
 fingerprint. A bad night is one transaction away from being reverted.
 
 `mem dream stage FILE` writes the proposals to `staged` and stops there — live memory is
-untouched until a run is applied.
+untouched until a run is applied. Each proposal keeps its `examples` (session ids and
+file:line excerpts) and `prevalence` alongside the free-text reason, and apply preserves
+both in the dream run's summary.
 
 `mem dream review RUN` prints what that run would do, one proposal at a time: the operation,
 project, kind, note text, confidence, the note it would merge into or replace, and the

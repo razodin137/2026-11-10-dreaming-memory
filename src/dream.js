@@ -51,7 +51,8 @@ export function packet(db, { projectId = null, since, limit = 40 } = {}) {
       "Every body must be checkable: a path, a command, a version, or a specific gotcha.",
       "Reject anything that only restates what the code already makes obvious.",
       "Set scope=global only for claims that hold across repositories.",
-      "Cite the session id or file:line in provenance."
+      "Cite the session id or file:line in provenance.",
+      "For every candidate, list examples ({ session, excerpt }) and state its prevalence, e.g. \"7 of 23 sessions\"."
     ],
     candidate_schema: CANDIDATE_SCHEMA,
     projects: Array.from(groups.values()),
@@ -208,6 +209,19 @@ function field(label, value) {
   return `   ${label.padEnd(12)}${value}`
 }
 
+function summarizeProposals(rows) {
+  return rows.map((row) => ({
+    id: row.id,
+    op: row.op,
+    project: row.project_slug || "global",
+    body: row.body,
+    confidence: Number(row.confidence),
+    provenance: row.provenance || null,
+    examples: decodeExamples(row.examples),
+    prevalence: row.prevalence || null
+  }))
+}
+
 function encodeExamples(value) {
   if (value === undefined || value === null || value === "") return null
   if (typeof value === "string") return value
@@ -255,6 +269,7 @@ export function apply(db, runId) {
       }
     }
     const pending = pendingCount(db, runId)
+    const stagedRows = db.prepare("SELECT * FROM staged WHERE run_id = ? ORDER BY id").all(runId)
     db.prepare(`
       UPDATE dream_runs
       SET finished_at = COALESCE(?, finished_at),
@@ -269,7 +284,7 @@ export function apply(db, runId) {
       counts.inserted,
       counts.merged,
       counts.retired,
-      JSON.stringify({ problems }),
+      JSON.stringify({ problems, proposals: summarizeProposals(stagedRows) }),
       runId
     )
   })

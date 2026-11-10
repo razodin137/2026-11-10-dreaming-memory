@@ -357,7 +357,15 @@ test("dream apply commits a reviewed run and is idempotent", () => {
   const staged = stage(db, {
     since: null,
     candidates: [
-      { op: "insert", project: alpha.slug, kind: "gotcha", body: "bin/setup needs redis running", provenance: "s1" }
+      {
+        op: "insert",
+        project: alpha.slug,
+        kind: "gotcha",
+        body: "bin/setup needs redis running",
+        provenance: "s1",
+        examples: [ { session: "s1", excerpt: "bin/setup:12" } ],
+        prevalence: "7 of 9 sessions"
+      }
     ]
   })
 
@@ -370,10 +378,16 @@ test("dream apply commits a reviewed run and is idempotent", () => {
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 1)
   assert.equal(review(db, staged.runId).pending, 0)
 
+  const summary = JSON.parse(db.prepare("SELECT summary FROM dream_runs WHERE id = ?").get(staged.runId).summary)
+  assert.deepEqual(summary.proposals[0].examples, [ { session: "s1", excerpt: "bin/setup:12" } ])
+  assert.equal(summary.proposals[0].prevalence, "7 of 9 sessions")
+
   const again = apply(db, staged.runId)
   assert.equal(again.inserted, 0)
   assert.equal(again.pending, 0)
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 1)
+  const kept = JSON.parse(db.prepare("SELECT summary FROM dream_runs WHERE id = ?").get(staged.runId).summary)
+  assert.equal(kept.proposals[0].prevalence, "7 of 9 sessions")
 })
 
 test("dream reject discards a run and blocks a later apply", () => {
