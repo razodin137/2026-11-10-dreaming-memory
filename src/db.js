@@ -9,8 +9,8 @@ export const DEFAULT_DB = process.env.MEMORY_DB || path.join(ROOT, "memory.db")
 
 export function open(dbPath = DEFAULT_DB) {
   const db = new DatabaseSync(dbPath)
-  db.exec("PRAGMA journal_mode = WAL")
   db.exec("PRAGMA busy_timeout = 5000")
+  db.exec("PRAGMA journal_mode = WAL")
   db.exec("PRAGMA foreign_keys = ON")
   return db
 }
