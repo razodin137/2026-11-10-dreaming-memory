@@ -1,13 +1,21 @@
 import fs from "node:fs"
 import path from "node:path"
 import { DEFAULT_DB, init } from "./db.js"
-import { packet, stage, apply, formatReview, reject, revert, review, fork, transcripts, propose, collect } from "./dream.js"
+import {
+  packet, stage, apply, formatReview, reject, revert, review, fork, transcripts, propose, collect,
+  consolidate, proposePromotions
+} from "./dream.js"
+import { add as draftAdd, commit as draftCommit, drop as draftDrop, list as draftList } from "./drafts.js"
 import { enrich } from "./enrich.js"
 import { materialize } from "./materialize.js"
-import { KINDS, SCOPES, decay, promote, recall, revisions, stats } from "./notes.js"
+import { KINDS, SCOPES, decay, recall, recordUse, revisions, stats } from "./notes.js"
 import { organize } from "./organize.js"
 import { archiveStale, byPath, list, register } from "./projects.js"
 import { end, start, writeDiary } from "./sessions.js"
+import { describe as steeringDescribe, ensure as steeringEnsure } from "./steering.js"
+import {
+  failures as failedToolCalls, ingest as ingestToolCalls, record as recordToolCall, recurring as recurringToolCalls
+} from "./toolcalls.js"
 import { recordNote, syncTopics, topicCounts } from "./topics.js"
 import { verify } from "./verify.js"
 
@@ -16,6 +24,8 @@ export function run(argv) {
   const dbPath = flags.db || DEFAULT_DB
   const db = init(dbPath)
   const cwd = process.cwd()
+  const sessionId = flags.session || process.env.MEM_SESSION || null
+  const projection = projectionFlag(flags)
 
   switch (command) {
     case "init":
@@ -37,27 +47,96 @@ export function run(argv) {
     case "session": {
       const action = rest[0]
       if (action === "start") {
-        const id = flags.id || `session-${Date.now()}`
-        const result = start(db, { id, dir: flags.path || cwd })
-        return print({ ...result, session: result.session.id })
+        const id = flags.id || sessionId || `session-${Date.now()}`
+        const result = start(db, {
+          id,
+          dir: flags.path || cwd,
+          limit: flags.limit ? Number(flags.limit) : 12
+        })
+        return print({ ...result, session: result.session.id, project: result.project.slug })
       }
-      if (action === "end") return print(end(db, { id: require(flags.id, "--id"), diary: readText(flags.diary) }))
-      if (action === "diary") return print(writeDiary(db, { id: require(flags.id, "--id"), text: textArg(flags, rest) }))
-      throw new Error("usage: mem session start|end|diary")
+      if (action === "end") {
+        const lessons = readLessons(flags.learn || flags.lessons)
+        const result = end(db, {
+          id: require(flags.id || sessionId, "--id"),
+          diary: readText(flags.diary),
+          lessons,
+          commit: flags["no-commit"] ? false : true
+        })
+        return print(result)
+      }
+      if (action === "diary") {
+        return print(writeDiary(db, { id: require(flags.id || sessionId, "--id"), text: textArg(flags, rest) }))
+      }
+      if (action === "tool") {
+        return print(recordToolCall(db, {
+          sessionId: require(flags.id || sessionId, "--id"),
+          command: require(flags.command, "--command"),
+          output: flags["output-file"] ? readText(flags["output-file"]) : flags.output || "",
+          exitCode: flags["exit-code"] !== undefined ? Number(flags["exit-code"]) : undefined
+        }))
+      }
+      if (action === "ingest") {
+        return print(ingestToolCalls(db, {
+          sessionId: require(flags.id || sessionId, "--id"),
+          events: readText(flags.file) || readStdin() || ""
+        }))
+      }
+      throw new Error("usage: mem session start|end|diary|tool|ingest")
     }
 
     case "remember": {
       const project = register(db, flags.path || cwd)
+      const scope = flags.scope || "project"
+      if (scope === "global" && !flags["allow-global"]) {
+        throw new Error("global notes are read-only to sessions; promote through the dream review gate")
+      }
       const result = recordNote(db, project, {
         projectId: project.id,
-        scope: flags.scope || "project",
+        scope,
         topic: flags.topic || "general",
         kind: flags.kind || "fact",
         body: textArg(flags, rest),
         confidence: flags.confidence === undefined ? 0.6 : Number(flags.confidence),
-        provenance: flags.provenance || project.slug
+        provenance: flags.provenance || project.slug,
+        sessionId
       }, { dir: flags.dir || null })
-      return print({ ...result, scope: flags.scope || "project", project: project.slug })
+      return print({ ...result, scope, project: project.slug })
+    }
+
+    case "draft": {
+      const action = rest[0] || "add"
+      const id = require(flags.session || sessionId, "--session")
+      const project = register(db, flags.path || cwd)
+      if (action === "add") {
+        return print(draftAdd(db, {
+          sessionId: id,
+          projectId: project.id,
+          topic: flags.topic || "general",
+          kind: flags.kind || "fact",
+          body: textArg(flags, rest.slice(1)),
+          confidence: flags.confidence === undefined ? 0.5 : Number(flags.confidence),
+          provenance: flags.provenance || id
+        }))
+      }
+      if (action === "list") return print(draftList(db, { sessionId: id, projectId: project.id }))
+      if (action === "commit") {
+        return print(draftCommit(db, {
+          sessionId: id,
+          id: rest[1] ? Number(rest[1]) : null,
+          project
+        }))
+      }
+      if (action === "drop") {
+        return print(draftDrop(db, { sessionId: id, id: rest[1] ? Number(rest[1]) : null }))
+      }
+      throw new Error("usage: mem draft add|list|commit|drop [ID] --session ID")
+    }
+
+    case "steering": {
+      const project = flags.path ? register(db, flags.path) : byPath(db, cwd) || register(db, cwd)
+      if (rest[0] === "init" || flags.init) return print(steeringEnsure(project, { dir: flags.dir || null }))
+      return print(steeringDescribe(project, { dir: flags.dir || null }))
     }
 
     case "sync": {
@@ -82,10 +161,20 @@ export function run(argv) {
         id: note.id,
         scope: note.scope,
         kind: note.kind,
+        topic: note.topic,
         body: note.body,
         confidence: Number(note.confidence.toFixed(2)),
+        use_count: note.use_count,
         score: Number(note.score.toFixed(3))
       })))
+    }
+
+    case "use": {
+      const project = byPath(db, flags.path || cwd)
+      return print(recordUse(db, {
+        noteId: Number(require(flags.note || rest[0], "NOTE")),
+        projectId: project ? project.id : null
+      }))
     }
 
     case "dream": {
@@ -106,6 +195,18 @@ export function run(argv) {
       if (rest[0] === "collect") {
         return print(collect(db, rest[1] || flags.out))
       }
+      if (rest[0] === "failures") {
+        const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
+        const projectId = project ? project.id : null
+        return print({
+          failures: failedToolCalls(db, { projectId, since: flags.since || null }),
+          recurring: recurringToolCalls(db, {
+            projectId,
+            since: flags.since || null,
+            minSessions: flags.minSessions ? Number(flags.minSessions) : 2
+          })
+        })
+      }
       if (rest[0] === "stage") {
         return print(stage(db, { candidates: readCandidates(rest[1]), since: flags.since || null }))
       }
@@ -116,20 +217,21 @@ export function run(argv) {
         return report
       }
       if (rest[0] === "apply") {
-        return print(apply(db, Number(require(rest[1], "RUN"))))
+        return print(apply(db, Number(require(rest[1], "RUN")), { projection }))
       }
       if (rest[0] === "reject") {
         return print(reject(db, Number(require(rest[1], "RUN"))))
       }
       if (rest[0] === "revert") {
-        return print(revert(db, Number(require(rest[1], "RUN"))))
+        return print(revert(db, Number(require(rest[1], "RUN")), { projection }))
       }
       if (rest[0] === "verify") {
         const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
         return print(verify(db, {
           projectId: project ? project.id : null,
           execute: Boolean(flags.execute) || process.env.MEM_VERIFY_EXECUTE === "1",
-          dir: flags.dir || null
+          dir: flags.dir || null,
+          projection
         }))
       }
       if (rest[0] === "organize") {
@@ -138,14 +240,16 @@ export function run(argv) {
           projectId: project.id,
           dir: flags.dir || null,
           splitAt: flags.splitAt ? Number(flags.splitAt) : undefined,
-          autoApply: flags.stage ? false : true
+          autoApply: flags.stage ? false : true,
+          projection
         }))
       }
       if (rest[0] === "enrich") {
         const project = flags.path ? byPath(db, flags.path) : byPath(db, cwd)
         return print(enrich(db, {
           projectId: project ? project.id : null,
-          since: flags.since || null
+          since: flags.since || null,
+          projection
         }))
       }
       if (flags.packet) {
@@ -156,35 +260,44 @@ export function run(argv) {
         }))
       }
       if (flags.apply) {
-        const staged = stage(db, { candidates: readCandidates(flags.apply), since: flags.since || null })
-        const applied = apply(db, staged.runId)
-        return print({ ...staged, ...applied })
+        const planned = consolidate(db, readCandidates(flags.apply))
+        const staged = stage(db, { candidates: planned.proposals, since: flags.since || null })
+        const applied = apply(db, staged.runId, { projection })
+        return print({ ...staged, merged_candidates: planned.merged, ...applied })
       }
       if (flags.auto) {
         const targets = flags.path
           ? [ register(db, flags.path) ]
           : list(db).filter((project) => project.status === "active")
         const report = { projects: [ ], organized: [ ], enriched: [ ], checked: [ ] }
-        for (const project of targets) report.organized.push(organize(db, { projectId: project.id, dir: flags.dir || null }))
-        const promotion = promote(db)
+        for (const project of targets) {
+          report.organized.push(organize(db, { projectId: project.id, dir: flags.dir || null, projection }))
+        }
+        const promotion = proposePromotions(db)
         const pruning = decay(db, { archiveDays: flags.archiveDays ? Number(flags.archiveDays) : 30 })
         const archived = archiveStale(db, flags.archiveDays ? Number(flags.archiveDays) : 30)
         for (const project of targets) {
           report.projects.push(project.slug)
-          report.enriched.push(enrich(db, { projectId: project.id, since: flags.since || null }))
+          report.enriched.push(enrich(db, { projectId: project.id, since: flags.since || null, projection }))
           report.checked.push(verify(db, {
             projectId: project.id,
             execute: Boolean(flags.execute) || process.env.MEM_VERIFY_EXECUTE === "1",
-            dir: flags.dir || null
+            dir: flags.dir || null,
+            projection
           }))
         }
-        return print({ ...report, ...promotion, ...pruning, archived })
+        return print({ ...report, promotion, ...pruning, archived })
       }
-      throw new Error("usage: mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | review RUN | apply RUN | reject RUN | revert RUN | verify | organize | enrich | --apply FILE | --auto")
+      throw new Error("usage: mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | failures | review RUN | apply RUN | reject RUN | revert RUN | verify | organize | enrich | --apply FILE | --auto")
     }
 
-    case "promote":
-      return print(promote(db))
+    case "promote": {
+      const result = proposePromotions(db)
+      if (flags.apply && result.runId) {
+        return print({ ...result, ...apply(db, result.runId, { projection }) })
+      }
+      return print(result)
+    }
 
     case "decay":
       return print(decay(db, { archiveDays: flags.archiveDays ? Number(flags.archiveDays) : 30 }))
@@ -235,6 +348,12 @@ function parse(argv) {
   return { command, flags, rest }
 }
 
+function projectionFlag(flags) {
+  if (flags.projection) return true
+  if (flags.markdown) return true
+  return undefined
+}
+
 function textArg(flags, rest) {
   const value = flags.body || rest.join(" ") || readStdin()
   if (!value) throw new Error("no body given (pass --body, positionally, or on stdin)")
@@ -250,6 +369,17 @@ function readCandidates(source) {
     throw new Error("candidates must be a JSON array or an object with a candidates array")
   }
   return candidates
+}
+
+function readLessons(source) {
+  const text = source === undefined || source === true ? readStdin() : readText(source)
+  if (!text || !String(text).trim()) return [ ]
+  const parsed = JSON.parse(text)
+  const lessons = Array.isArray(parsed) ? parsed : parsed.lessons || parsed.candidates
+  if (!Array.isArray(lessons)) {
+    throw new Error("lessons must be a JSON array or an object with a lessons array")
+  }
+  return lessons
 }
 
 function readText(source) {
@@ -276,13 +406,16 @@ function usage() {
     "mem init",
     "mem register [path]",
     "mem projects",
-    "mem session start|end|diary [--id ID] [--diary FILE]",
-    "mem remember --body TEXT [--topic deploy] [--kind gotcha] [--scope project] [--confidence 0.6]",
+    "mem session start|end|diary|tool|ingest [--id ID] [--diary FILE] [--learn FILE]",
+    "mem draft add|list|commit|drop [ID] --session ID",
+    "mem steering [init] [--path DIR]",
+    "mem remember --body TEXT [--topic deploy] [--kind gotcha] [--scope project]",
     "mem recall [--query TEXT] [--limit 12]",
+    "mem use NOTE",
     "mem sync | topics",
-    "mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | review RUN [--json] | apply RUN | reject RUN | revert RUN | verify [--execute] | organize [--stage] | enrich [--since DATE] | --apply FILE | --auto",
+    "mem dream --packet | stage FILE | propose [FILE] [--session ID] | fork [--path] | transcripts [--dir DIR] | collect MEM_OUT | failures | review RUN [--json] | apply RUN | reject RUN | revert RUN | verify [--execute] | organize [--stage] | enrich [--since DATE] | --apply FILE | --auto",
     "mem revisions [--note ID] [--run RUN] [--limit 50]",
-    "mem promote | decay | materialize | stats"
+    "mem promote [--apply] | decay | materialize | stats"
   ].join("\n")
 }
 

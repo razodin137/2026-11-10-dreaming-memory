@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 620" role="img" aria-labelledby="loop-svg-title loop-svg-desc"><style>
+  .zone { fill: none; stroke: #bdb3a3; stroke-dasharray: 5 6; }
+  .zone-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 10px; letter-spacing: 1.6px; fill: #b3482a; }
+  .zone-sub { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #968d7d; }
+  .box { fill: #f7f3ea; stroke: #c3b8a6; }
+  .box-dark { fill: #1c1915; }
+  .box-sage { fill: #cbd4c2; stroke: #aebba4; }
+  .box-lilac { fill: #cfc7e0; stroke: #b8aecb; }
+  .box-rust { fill: #b3482a; }
+  .box-soft { fill: #eee7da; stroke: #d0c5b3; }
+  .node-title { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; font-weight: 600; fill: #191611; }
+  .node-sub { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 11px; fill: #6f675a; }
+  .node-mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; fill: #6f675a; }
+  .store-title { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; fill: #f8f4eb; }
+  .store-meta { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #9d9280; }
+  .store-row { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 11.5px; fill: #191611; }
+  .store-num { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 10px; fill: #6f675a; }
+  .wire { fill: none; stroke: #8f8472; stroke-width: 1.15; }
+  .wire-soft { fill: none; stroke: #b3a895; stroke-width: 1; stroke-dasharray: 4 5; }
+  .wire-rust { fill: none; stroke: #b3482a; stroke-width: 1.4; }
+  .wire-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #6f675a; letter-spacing: .5px; }
+  .chip { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #191611; }
+  .chip-light { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #f8f4eb; }
+  .chart-sub { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #6f675a; }
+  .chart-label { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 12px; font-weight: 600; fill: #191611; }
+  .chart-value { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; fill: #191611; }
+  .axis-line { stroke: #c7bcaa; stroke-width: 1; }
+  .grid-line { stroke: #e2dacb; stroke-width: 1; }
+  .axis-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #968d7d; }
+  .retire-band { fill: #f0e3dc; }
+  .retire-line { stroke: #b3482a; stroke-width: 1; stroke-dasharray: 4 4; }
+  .retire-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #b3482a; }
+  .curve { fill: none; stroke-width: 2; }
+  .curve-1 { stroke: #b3482a; }
+  .curve-2 { stroke: #6e7d66; }
+  .curve-3 { stroke: #70658c; }
+  .curve-dot { fill: #f8f4eb; stroke-width: 2; }
+  .bar-score { fill: #b3482a; }
+  .conf-dot { fill: #f8f4eb; stroke: #191611; stroke-width: 1.3; }
+  .conf-stem { stroke: #191611; stroke-width: 1; stroke-dasharray: 2 3; }
+</style>
+<rect x="0" y="0" width="1120" height="620" fill="#f8f4eb"/>
+        <title id="loop-svg-title">The two loops of mem</title>
+        <desc id="loop-svg-desc">Agents write and recall notes in real time from a shared SQLite store. At night the store exports a packet, an agent reads transcripts and topic files, candidates are staged, reviewed, and applied back to the store. Promote, decay, and archive run afterward.</desc>
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#8f8472"></path>
+          </marker>
+          <marker id="ar-rust" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#b3482a"></path>
+          </marker>
+        </defs>
+
+        <rect class="zone" x="8" y="44" width="318" height="512" rx="18"></rect>
+        <text class="zone-label" x="30" y="72">01 · THE DAY</text>
+        <text class="zone-sub" x="30" y="92">in-band / real time</text>
+
+        <rect class="box" x="28" y="122" width="278" height="86" rx="4"></rect>
+        <rect x="46" y="140" width="16" height="16" rx="2" fill="#b3482a"></rect>
+        <text class="node-title" x="72" y="153">agent A · s-1041</text>
+        <rect x="46" y="172" width="118" height="7" rx="3" fill="#d8cebd"></rect>
+        <rect x="170" y="172" width="34" height="7" rx="3" fill="#b3482a"></rect>
+        <rect x="210" y="172" width="22" height="7" rx="3" fill="#6f675a"></rect>
+        <rect x="238" y="172" width="46" height="7" rx="3" fill="#c7bcaa"></rect>
+        <text class="node-mono" x="46" y="196">reads deploy.md</text>
+
+        <rect class="box" x="28" y="240" width="278" height="86" rx="4"></rect>
+        <rect x="46" y="258" width="16" height="16" rx="2" fill="#b3482a"></rect>
+        <text class="node-title" x="72" y="271">agent B · s-1042</text>
+        <rect x="46" y="290" width="76" height="7" rx="3" fill="#d8cebd"></rect>
+        <rect x="128" y="290" width="42" height="7" rx="3" fill="#b3482a"></rect>
+        <rect x="176" y="290" width="60" height="7" rx="3" fill="#6f675a"></rect>
+        <text class="node-mono" x="46" y="314">writes flaky-tests.md</text>
+
+        <rect class="box" x="28" y="358" width="278" height="86" rx="4"></rect>
+        <rect x="46" y="376" width="16" height="16" rx="2" fill="#b3482a"></rect>
+        <text class="node-title" x="72" y="389">agent C · s-1043</text>
+        <rect x="46" y="408" width="96" height="7" rx="3" fill="#d8cebd"></rect>
+        <rect x="148" y="408" width="24" height="7" rx="3" fill="#6f675a"></rect>
+        <rect x="178" y="408" width="54" height="7" rx="3" fill="#b3482a"></rect>
+        <text class="node-mono" x="46" y="432">searches repo-layout</text>
+
+        <path class="wire" d="M 306 165 H 376" marker-start="url(#ar)" marker-end="url(#ar)"></path>
+        <path class="wire" d="M 306 283 H 376" marker-start="url(#ar)" marker-end="url(#ar)"></path>
+        <path class="wire" d="M 306 401 H 376" marker-start="url(#ar)" marker-end="url(#ar)"></path>
+        <text class="wire-label" x="310" y="150">remember · recall</text>
+
+        <rect class="box-dark" x="376" y="104" width="368" height="356" rx="4"></rect>
+        <rect x="376" y="104" width="368" height="46" rx="4" fill="#26221b"></rect>
+        <text class="store-title" x="396" y="133">memory.db</text>
+        <text class="store-meta" x="690" y="133" text-anchor="end">SQLITE · WAL</text>
+
+        <text class="store-row" x="396" y="178">notes</text>
+        <text class="store-num" x="724" y="178" text-anchor="end">41 live · project + global</text>
+        <line x1="396" y1="194" x2="724" y2="194" stroke="#3b3429"></line>
+
+        <text class="store-row" x="396" y="218">note_hits</text>
+        <text class="store-num" x="724" y="218" text-anchor="end">128 · drives decay</text>
+        <line x1="396" y1="234" x2="724" y2="234" stroke="#3b3429"></line>
+
+        <text class="store-row" x="396" y="258">sessions</text>
+        <text class="store-num" x="724" y="258" text-anchor="end">23 diaries</text>
+        <line x1="396" y1="274" x2="724" y2="274" stroke="#3b3429"></line>
+
+        <text class="store-row" x="396" y="298">dream_runs</text>
+        <text class="store-num" x="724" y="298" text-anchor="end">7 nights · 9 staged</text>
+        <line x1="396" y1="314" x2="724" y2="314" stroke="#3b3429"></line>
+
+        <text class="store-row" x="396" y="338">note_revisions</text>
+        <text class="store-num" x="724" y="338" text-anchor="end">17 previous selves</text>
+        <line x1="396" y1="354" x2="724" y2="354" stroke="#3b3429"></line>
+
+        <text class="node-mono" x="396" y="382" fill="#b8ae9b">memory/</text>
+        <text class="node-mono" x="452" y="382" fill="#d8b28b">deploy.md · flaky-tests.md</text>
+        <text class="node-mono" x="396" y="402" fill="#9d9280">ledger id lives in an HTML comment</text>
+        <text class="node-mono" x="396" y="428" fill="#9d9280">recordNote → per-file lock → one writer</text>
+
+        <rect class="box-soft" x="376" y="486" width="368" height="60" rx="4"></rect>
+        <text class="node-mono" x="396" y="508">--auto / housekeeping</text>
+        <rect x="396" y="518" width="86" height="20" rx="10" fill="#cbd4c2"></rect>
+        <text class="chip" x="439" y="532" text-anchor="middle">promote</text>
+        <rect x="490" y="518" width="78" height="20" rx="10" fill="#e7dcc8"></rect>
+        <text class="chip" x="529" y="532" text-anchor="middle">decay</text>
+        <rect x="576" y="518" width="92" height="20" rx="10" fill="#cfc7e0"></rect>
+        <text class="chip" x="622" y="532" text-anchor="middle">archive</text>
+        <path class="wire" d="M 560 460 V 486" marker-end="url(#ar)"></path>
+
+        <rect class="zone" x="794" y="44" width="318" height="512" rx="18"></rect>
+        <text class="zone-label" x="816" y="72">02 · THE NIGHT</text>
+        <text class="zone-sub" x="816" y="92">out-of-band / 03:00</text>
+
+        <rect class="box-sage" x="816" y="112" width="276" height="60" rx="4"></rect>
+        <text class="node-title" x="834" y="136">dream --packet --since</text>
+        <text class="node-sub" x="834" y="155">undistilled sessions → packet.json</text>
+
+        <rect class="box-lilac" x="816" y="200" width="276" height="60" rx="4"></rect>
+        <text class="node-title" x="834" y="224">agent</text>
+        <text class="node-sub" x="834" y="243">reads transcripts + topic files</text>
+
+        <rect class="box" x="816" y="288" width="276" height="60" rx="4"></rect>
+        <text class="node-title" x="834" y="312">stage</text>
+        <text class="node-sub" x="834" y="331">dream_runs + staged, one transaction</text>
+
+        <rect class="box" x="816" y="376" width="276" height="70" rx="4"></rect>
+        <text class="node-title" x="834" y="400">review RUN</text>
+        <text class="node-sub" x="834" y="419">read-only diff · nothing applied</text>
+        <rect x="834" y="426" width="48" height="14" rx="7" fill="#b3482a"></rect>
+        <text class="chip-light" x="858" y="436" text-anchor="middle">apply</text>
+        <rect x="890" y="426" width="54" height="14" rx="7" fill="#e2d9ca"></rect>
+        <text class="chip" x="917" y="436" text-anchor="middle">reject</text>
+
+        <path class="wire" d="M 954 172 V 200" marker-end="url(#ar)"></path>
+        <path class="wire" d="M 954 260 V 288" marker-end="url(#ar)"></path>
+        <path class="wire" d="M 954 348 V 376" marker-end="url(#ar)"></path>
+
+        <path class="wire" d="M 744 150 L 816 138" marker-end="url(#ar)"></path>
+        <text class="wire-label" x="762" y="130">export</text>
+        <path class="wire-rust" d="M 816 411 C 780 411 768 390 768 366 V 345 H 744" marker-end="url(#ar-rust)"></path>
+        <text class="wire-label" x="778" y="352">apply</text>
+
+        <text class="node-mono" x="816" y="480">one run, one audit row</text>
+        <text class="node-mono" x="816" y="500">revert restores every previous note</text>
+        <text class="node-mono" x="816" y="520">reject throws the batch away</text>
+        <text class="node-mono" x="816" y="540">live memory waits for review</text>
+      </svg>

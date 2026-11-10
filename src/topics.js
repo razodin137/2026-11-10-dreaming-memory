@@ -2,7 +2,8 @@ import fs from "node:fs"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { fingerprint, now } from "./db.js"
-import { liveNotes, normalizeTopic, remember } from "./notes.js"
+import { decodeExamples, liveNotes, normalizeTopic, remember, resolveExistingTopic } from "./notes.js"
+import { dropper } from "./steering.js"
 import { shared } from "./text.js"
 
 export const MEMORY_DIR = "memory"
@@ -12,6 +13,12 @@ const ENTRY = /^- <!-- mem (\{.*\}) --> (.*)$/
 const PLAIN = /^- (?!<!-- mem )(.*)$/
 const LOCK_TIMEOUT_MS = Number(process.env.MEM_LOCK_TIMEOUT_MS || 5000)
 const LOCK_STALE_MS = Number(process.env.MEM_LOCK_STALE_MS || 30000)
+
+export function projectionEnabled(options = { }) {
+  if (options.projection !== undefined) return Boolean(options.projection)
+  if (options.markdown !== undefined) return Boolean(options.markdown)
+  return process.env.MEM_PROJECTION === "1"
+}
 
 export function memoryDir(project, options = { }) {
   const dir = options.dir || process.env.MEMORY_DIR || path.join(project.path, MEMORY_DIR)
@@ -111,14 +118,7 @@ function renderEntry(note) {
 
 function exampleSessions(value) {
   if (!value) return [ ]
-  let list = value
-  if (typeof value === "string") {
-    try {
-      list = JSON.parse(value)
-    } catch {
-      return [ ]
-    }
-  }
+  const list = decodeExamples(value)
   if (!Array.isArray(list)) return [ ]
   return list
     .map((example) => (example && typeof example === "object" ? example.session : example))
@@ -211,7 +211,15 @@ export function syncTopics(db, project, options = { }) {
 }
 
 export function recordNote(db, project, note, options = { }) {
-  const topic = normalizeTopic(note.topic)
+  if (!note.allowSteered && dropper(project)(note.body)) {
+    return { skipped: true, reason: "steering: this claim is not worth remembering" }
+  }
+  const requested = note.topic === undefined || note.topic === null ? "general" : note.topic
+  const topic = resolveExistingTopic(db, {
+    projectId: note.projectId ?? project.id,
+    scope: note.scope || "project",
+    requested
+  })
   const previous = existingTopic(db, project, note)
   const file = topicFile(project, topic, options)
   const result = withFileLock(file, () => {

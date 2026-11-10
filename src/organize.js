@@ -1,12 +1,13 @@
 import { liveNotes, normalizeTopic } from "./notes.js"
 import { byId } from "./projects.js"
 import { apply, stage } from "./dream.js"
-import { syncTopics, topicCounts } from "./topics.js"
+import { projectionEnabled, syncTopics, topicCounts } from "./topics.js"
 import { significant } from "./text.js"
+import { preferredTopic, topicKey } from "./subjects.js"
 
 const SPLIT_AT = 20
 
-export function organize(db, { projectId = null, dir = null, splitAt = SPLIT_AT, autoApply = true } = { }) {
+export function organize(db, { projectId = null, dir = null, splitAt = SPLIT_AT, autoApply = true, projection = projectionEnabled() } = { }) {
   const project = projectId === null ? null : byId(db, projectId)
   if (!project) throw new Error("organize needs a project")
 
@@ -18,20 +19,19 @@ export function organize(db, { projectId = null, dir = null, splitAt = SPLIT_AT,
   const before = topicCounts(db, project)
   const groups = new Map()
   for (const item of before) {
-    const key = canonicalTopic(item.topic)
+    const key = topicKey(item.topic)
     if (!groups.has(key)) groups.set(key, [ ])
     groups.get(key).push(item)
   }
 
-  for (const [ canonical, group ] of groups) {
+  for (const [ key, group ] of groups) {
     if (group.length < 2) continue
-    const winner = group.find((item) => item.topic === canonical) ||
-      group.slice().sort((a, b) => b.notes - a.notes || a.topic.localeCompare(b.topic))[0]
+    const winner = preferredTopic(key, group)
     for (const loser of group) {
-      if (loser.topic === winner.topic) continue
+      if (loser.topic === winner) continue
       merged += 1
       for (const note of notes.filter((entry) => normalizeTopic(entry.topic) === loser.topic)) {
-        plan(moves, note, winner.topic, `organize: merged ${loser.topic} into ${winner.topic}`, project.slug)
+        plan(moves, note, winner, `organize: merged ${loser.topic} into ${winner}`, project.slug)
       }
     }
   }
@@ -74,10 +74,10 @@ export function organize(db, { projectId = null, dir = null, splitAt = SPLIT_AT,
   if (candidates.length > 0) {
     const staged = stage(db, { candidates, since: null })
     runId = staged.runId
-    if (autoApply) applied = apply(db, runId)
+    if (autoApply) applied = apply(db, runId, { projection })
   }
 
-  const files = syncTopics(db, project, { dir })
+  const files = projection ? syncTopics(db, project, { dir }) : null
   return {
     runId,
     moved: candidates.length,

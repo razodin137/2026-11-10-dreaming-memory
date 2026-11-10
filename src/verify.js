@@ -5,7 +5,7 @@ import { now } from "./db.js"
 import { liveNotes } from "./notes.js"
 import { byId } from "./projects.js"
 import { stage } from "./dream.js"
-import { syncTopics } from "./topics.js"
+import { projectionEnabled, syncTopics } from "./topics.js"
 
 const COMMANDS = new Set([
   "npm", "pnpm", "yarn", "npx", "node", "bun", "deno", "git", "make", "cmake", "cargo", "go",
@@ -20,7 +20,7 @@ const READ_ONLY = [
 const CONFIDENCE_BUMP = 0.05
 const VERIFY_INTERVAL_MS = 12 * 60 * 60 * 1000
 
-export function verify(db, { projectId = null, execute = false, dir = null, nowAt = new Date() } = { }) {
+export function verify(db, { projectId = null, execute = false, dir = null, nowAt = new Date(), projection = projectionEnabled() } = { }) {
   const project = projectId === null ? null : byId(db, projectId)
   const notes = liveNotes(db, { projectId })
   const results = { checked: notes.length, true: 0, false: 0, unknown: 0, staged: 0, runId: null }
@@ -69,7 +69,7 @@ export function verify(db, { projectId = null, execute = false, dir = null, nowA
     results.runId = staged.runId
     results.problems = staged.problems
   }
-  if (project) results.files = syncTopics(db, project)
+  if (project && projection) results.files = syncTopics(db, project)
   return results
 }
 
@@ -77,31 +77,64 @@ export function checkClaim(note, context = { }, options = { }) {
   const body = note.body
   const atoms = backticked(body)
   const checks = [ ]
+  const unverified = [ ]
 
   for (const atom of atoms) {
+    if (looksLikeCommand(atom)) {
+      if (!SAFE_COMMAND.test(atom)) {
+        unverified.push({ reason: `command not safe to run: ${atom}` })
+        continue
+      }
+      if (!options.execute && !readOnly(atom)) {
+        unverified.push({ reason: `command not run: ${atom}` })
+        continue
+      }
+      const command = split(atom)
+      if (command.length === 0) continue
+      checks.push(runCommand(command, context.dir || process.cwd()))
+      continue
+    }
+
     if (!looksLikePath(atom)) continue
-    if (note.scope === "global" && !path.isAbsolute(atom)) continue
-    const target = path.resolve(context.dir || process.cwd(), atom)
-    checks.push(fs.existsSync(target)
-      ? { ok: true, reason: `path exists: ${atom}` }
-      : { ok: false, reason: `path missing: ${atom}`, correction: null })
-  }
-
-  for (const atom of atoms) {
-    if (!looksLikeCommand(atom) || !SAFE_COMMAND.test(atom)) continue
-    if (!options.execute && !readOnly(atom)) continue
-    const command = split(atom)
-    if (command.length === 0) continue
-    checks.push(runCommand(command, context.dir || process.cwd()))
+    const result = checkPath(atom, note, context)
+    if (result.state === "true") checks.push({ ok: true, reason: result.reason })
+    else if (result.state === "false") checks.push({ ok: false, reason: result.reason, correction: null })
+    else unverified.push({ reason: result.reason })
   }
 
   const versionCheck = checkVersion(body, context)
-  if (versionCheck) checks.push(versionCheck)
+  if (versionCheck && versionCheck.unknown) unverified.push({ reason: versionCheck.reason })
+  else if (versionCheck) checks.push(versionCheck)
 
   const failed = checks.find((check) => !check.ok)
   if (failed) return { status: "false", reason: failed.reason, correction: failed.correction || null }
-  if (checks.length > 0) return { status: "true", reason: checks.map((check) => check.reason).join("; ") }
+  if (checks.length > 0 && unverified.length === 0) {
+    return { status: "true", reason: checks.map((check) => check.reason).join("; ") }
+  }
+  if (unverified.length > 0) {
+    return { status: "unknown", reason: unverified.map((entry) => entry.reason).join("; ") }
+  }
   return { status: "unknown", reason: "no checkable path, command, or version" }
+}
+
+function checkPath(atom, note, context) {
+  if (note.scope === "global" && !path.isAbsolute(atom)) {
+    return { state: "unknown", reason: `relative path not resolved across projects: ${atom}` }
+  }
+  const target = path.resolve(context.dir || process.cwd(), atom)
+  if (fs.existsSync(target)) return { state: "true", reason: `path exists: ${atom}` }
+  if (isAbsolute(atom) || isBareName(atom)) {
+    return { state: "unknown", reason: `not found as a file; a route or generated name is not evidence: ${atom}` }
+  }
+  return { state: "false", reason: `path missing: ${atom}` }
+}
+
+function isAbsolute(value) {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)
+}
+
+function isBareName(value) {
+  return !value.includes("/") && !value.includes("\\")
 }
 
 function contextFor(db, note, project, dir) {
@@ -136,8 +169,8 @@ function looksLikePath(value) {
   if (/^https?:/.test(value)) return false
   if (/[*<>%#]/.test(value)) return false
   if (value.includes(":")) return false
-  if (looksLikeCommand(value)) return true
-  return value.includes("/") || /\.(js|mjs|ts|tsx|jsx|rb|json|md|yml|yaml|toml|sql|sh|css|scss|html|py|go|rs)$/.test(value)
+  if (looksLikeCommand(value)) return false
+  return value.includes("/") || /\.(js|mjs|cjs|ts|tsx|jsx|rb|json|md|yml|yaml|toml|sql|sh|css|scss|html|py|go|rs)$/.test(value)
 }
 
 function looksLikeCommand(value) {
@@ -176,11 +209,15 @@ function checkVersion(body, context) {
   if (claims.length === 0) return null
 
   let checked = 0
+  const unresolved = [ ]
   for (const claim of claims) {
     const name = claim[1].toLowerCase()
     const claimed = claim[2]
     const actual = actualVersion(name, context)
-    if (!actual) continue
+    if (!actual) {
+      unresolved.push(`${name} ${claimed}`)
+      continue
+    }
     checked += 1
     if (!satisfied(name, claimed, actual)) {
       return {
@@ -190,7 +227,12 @@ function checkVersion(body, context) {
       }
     }
   }
-  if (checked === 0) return null
+  if (unresolved.length > 0) {
+    return { unknown: true, reason: `version not resolved: ${unresolved.join(", ")}` }
+  }
+  if (checked === 0) {
+    return { unknown: true, reason: `version not resolved: ${claims.map((claim) => `${claim[1]} ${claim[2]}`).join(", ")}` }
+  }
   return { ok: true, reason: "versions agree" }
 }
 

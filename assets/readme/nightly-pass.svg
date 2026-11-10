@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 480" role="img" aria-labelledby="night-svg-title night-svg-desc"><style>
+  .zone { fill: none; stroke: #bdb3a3; stroke-dasharray: 5 6; }
+  .zone-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 10px; letter-spacing: 1.6px; fill: #b3482a; }
+  .zone-sub { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #968d7d; }
+  .box { fill: #f7f3ea; stroke: #c3b8a6; }
+  .box-dark { fill: #1c1915; }
+  .box-sage { fill: #cbd4c2; stroke: #aebba4; }
+  .box-lilac { fill: #cfc7e0; stroke: #b8aecb; }
+  .box-rust { fill: #b3482a; }
+  .box-soft { fill: #eee7da; stroke: #d0c5b3; }
+  .node-title { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; font-weight: 600; fill: #191611; }
+  .node-sub { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 11px; fill: #6f675a; }
+  .node-mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; fill: #6f675a; }
+  .store-title { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; fill: #f8f4eb; }
+  .store-meta { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #9d9280; }
+  .store-row { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 11.5px; fill: #191611; }
+  .store-num { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 10px; fill: #6f675a; }
+  .wire { fill: none; stroke: #8f8472; stroke-width: 1.15; }
+  .wire-soft { fill: none; stroke: #b3a895; stroke-width: 1; stroke-dasharray: 4 5; }
+  .wire-rust { fill: none; stroke: #b3482a; stroke-width: 1.4; }
+  .wire-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #6f675a; letter-spacing: .5px; }
+  .chip { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #191611; }
+  .chip-light { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #f8f4eb; }
+  .chart-sub { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #6f675a; }
+  .chart-label { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 12px; font-weight: 600; fill: #191611; }
+  .chart-value { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; fill: #191611; }
+  .axis-line { stroke: #c7bcaa; stroke-width: 1; }
+  .grid-line { stroke: #e2dacb; stroke-width: 1; }
+  .axis-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #968d7d; }
+  .retire-band { fill: #f0e3dc; }
+  .retire-line { stroke: #b3482a; stroke-width: 1; stroke-dasharray: 4 4; }
+  .retire-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #b3482a; }
+  .curve { fill: none; stroke-width: 2; }
+  .curve-1 { stroke: #b3482a; }
+  .curve-2 { stroke: #6e7d66; }
+  .curve-3 { stroke: #70658c; }
+  .curve-dot { fill: #f8f4eb; stroke-width: 2; }
+  .bar-score { fill: #b3482a; }
+  .conf-dot { fill: #f8f4eb; stroke: #191611; stroke-width: 1.3; }
+  .conf-stem { stroke: #191611; stroke-width: 1; stroke-dasharray: 2 3; }
+</style>
+<rect x="0" y="0" width="1120" height="480" fill="#f8f4eb"/>
+          <title id="night-svg-title">The nightly dream pipeline</title>
+          <desc id="night-svg-desc">Sessions become a packet, an agent reads it, proposals are staged, reviewed, then applied or rejected. Apply writes notes and revisions, materializes files, and feeds the next morning's sessions.</desc>
+          <defs>
+            <marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#8f8472"></path>
+            </marker>
+            <marker id="ar2-rust" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#b3482a"></path>
+            </marker>
+          </defs>
+
+          <text class="zone-label" x="20" y="34">THE NIGHTLY CYCLE</text>
+          <text class="zone-sub" x="20" y="54">one packet → one agent → one reviewed run</text>
+
+          <rect class="box" x="20" y="84" width="188" height="126" rx="4"></rect>
+          <text class="node-mono" x="36" y="110">01</text>
+          <text class="node-title" x="36" y="136">sessions</text>
+          <text class="node-sub" x="36" y="157">diaries + tool calls</text>
+          <text class="node-mono" x="36" y="179">s-1041 … s-1063</text>
+
+          <rect class="box-sage" x="240" y="84" width="188" height="126" rx="4"></rect>
+          <text class="node-mono" x="256" y="110">02</text>
+          <text class="node-title" x="256" y="136">packet</text>
+          <text class="node-sub" x="256" y="157">undistilled only</text>
+          <text class="node-mono" x="256" y="179">--since 2026-11-09</text>
+
+          <rect class="box-lilac" x="460" y="84" width="188" height="126" rx="4"></rect>
+          <text class="node-mono" x="476" y="110">03</text>
+          <text class="node-title" x="476" y="136">agent</text>
+          <text class="node-sub" x="476" y="157">transcripts + files</text>
+          <text class="node-mono" x="476" y="179">candidates.json</text>
+
+          <rect class="box" x="680" y="84" width="188" height="126" rx="4"></rect>
+          <text class="node-mono" x="696" y="110">04</text>
+          <text class="node-title" x="696" y="136">stage</text>
+          <text class="node-sub" x="696" y="157">fingerprint + dedupe</text>
+          <text class="node-mono" x="696" y="179">dream_runs + staged</text>
+
+          <rect class="box" x="900" y="84" width="188" height="126" rx="4"></rect>
+          <text class="node-mono" x="916" y="110">05</text>
+          <text class="node-title" x="916" y="136">review</text>
+          <text class="node-sub" x="916" y="157">read-only report</text>
+          <text class="node-mono" x="916" y="179">run 1 · 3 proposals</text>
+
+          <path class="wire" d="M 208 147 H 240" marker-end="url(#ar2)"></path>
+          <path class="wire" d="M 428 147 H 460" marker-end="url(#ar2)"></path>
+          <path class="wire" d="M 648 147 H 680" marker-end="url(#ar2)"></path>
+          <path class="wire" d="M 868 147 H 900" marker-end="url(#ar2)"></path>
+          <text class="wire-label" x="209" y="138">export</text>
+          <text class="wire-label" x="429" y="138">read</text>
+          <text class="wire-label" x="649" y="138">propose</text>
+          <text class="wire-label" x="869" y="138">run</text>
+
+          <rect class="box-soft" x="680" y="284" width="188" height="58" rx="4"></rect>
+          <text class="node-title" x="696" y="308">reject RUN</text>
+          <text class="node-sub" x="696" y="327">discard the batch</text>
+
+          <rect class="box-rust" x="900" y="284" width="188" height="58" rx="4"></rect>
+          <text class="node-title" x="916" y="308" fill="#fbf6e9">apply RUN</text>
+          <text class="node-sub" x="916" y="327" fill="#e8c9bd">notes + revisions</text>
+
+          <path class="wire" d="M 940 210 C 900 242 820 250 792 284" marker-end="url(#ar2)"></path>
+          <path class="wire-rust" d="M 988 210 V 284" marker-end="url(#ar2-rust)"></path>
+          <text class="wire-label" x="950" y="260">commit</text>
+          <text class="wire-label" x="700" y="264">stays untouched</text>
+
+          <rect class="box" x="900" y="382" width="188" height="46" rx="4"></rect>
+          <text class="node-mono" x="916" y="402">materialize · sync</text>
+          <text class="node-mono" x="916" y="418">files carry the ledger id</text>
+          <path class="wire" d="M 994 342 V 382" marker-end="url(#ar2)"></path>
+
+          <path class="wire-soft" d="M 994 428 V 456 H 114 V 210" marker-end="url(#ar2)"></path>
+          <text class="wire-label" x="520" y="470">next 09:00 · the same agents, slightly smarter</text>
+        </svg>

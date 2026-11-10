@@ -2,33 +2,40 @@ import { now } from "./db.js"
 import { liveNotes } from "./notes.js"
 import { byId } from "./projects.js"
 import { significant } from "./text.js"
-import { syncTopics } from "./topics.js"
+import { projectionEnabled, syncTopics } from "./topics.js"
 
 const COMMAND = new Set([ "npm", "pnpm", "yarn", "npx", "node", "bun", "git", "make", "bundle", "rake", "rails", "bin/rails", "docker" ])
 
-export function enrich(db, { projectId = null, since = null, limit = 200 } = { }) {
+export function enrich(db, { projectId = null, since = null, limit = 200, projection = projectionEnabled() } = { }) {
   const project = projectId === null ? null : byId(db, projectId)
   const stamp = now()
   const cutoff = since || new Date(Date.now() - 86400000).toISOString()
   const sessions = db.prepare(`
-    SELECT id, project_id, diary, started_at FROM sessions
-    WHERE diary IS NOT NULL AND diary <> '' AND started_at >= ?
-      AND (? IS NULL OR project_id = ? OR project_id IS NULL)
-    ORDER BY started_at ASC
+    SELECT s.id, s.project_id, s.diary, s.started_at FROM sessions s
+    WHERE ((s.diary IS NOT NULL AND s.diary <> '') OR EXISTS (SELECT 1 FROM tool_calls t WHERE t.session_id = s.id))
+      AND s.started_at >= ?
+      AND (? IS NULL OR s.project_id = ? OR s.project_id IS NULL)
+    ORDER BY s.started_at ASC
   `).all(cutoff, project ? project.id : null, project ? project.id : null)
   if (sessions.length === 0) return { sessions: 0, notes: 0, enriched: 0 }
 
+  const calls = new Map()
+  for (const session of sessions) {
+    calls.set(session.id, db.prepare("SELECT * FROM tool_calls WHERE session_id = ? ORDER BY id").all(session.id))
+  }
   const notes = liveNotes(db, { projectId: project ? project.id : null, limit })
   let enriched = 0
 
   for (const note of notes) {
-    const matches = sessions.filter((session) => matchesNote(note, session))
+    const matches = sessions.filter((session) => {
+      return matchesText(note, session.diary) || matchesText(note, callText(calls.get(session.id)))
+    })
     if (matches.length === 0) continue
 
     const provenance = mergeProvenance(note.provenance, matches.map((session) => session.id))
-    const examples = mergeExamples(decode(note.examples), matches, note)
+    const examples = mergeExamples(decode(note.examples), matches, note, calls)
     const prevalence = `${matches.length} of ${sessions.length} sessions`
-    const repro = note.repro || bestCommand(note, matches)
+    const repro = note.repro || bestCommand(note, matches, calls)
 
     const changed = provenance !== (note.provenance || "") ||
       prevalence !== (note.prevalence || "") ||
@@ -43,19 +50,23 @@ export function enrich(db, { projectId = null, since = null, limit = 200 } = { }
     enriched += 1
   }
 
-  const files = project ? syncTopics(db, project) : null
+  const files = project && projection ? syncTopics(db, project) : null
   return { sessions: sessions.length, notes: notes.length, enriched, files }
 }
 
-function matchesNote(note, session) {
+function matchesText(note, text) {
   const body = new Set(significant(note.body))
   if (body.size === 0) return false
-  const diary = new Set(significant(session.diary))
+  const seen = new Set(significant(text))
   let shared = 0
   for (const token of body) {
-    if (diary.has(token)) shared += 1
+    if (seen.has(token)) shared += 1
   }
   return shared >= (body.size <= 3 ? 1 : 2)
+}
+
+function callText(calls) {
+  return (calls || [ ]).map((call) => `${call.command}\n${call.output || ""}`).join("\n")
 }
 
 function mergeProvenance(existing, ids) {
@@ -64,16 +75,25 @@ function mergeProvenance(existing, ids) {
   return Array.from(known).join(" | ")
 }
 
-function mergeExamples(existing, sessions, note) {
+function mergeExamples(existing, sessions, note, calls) {
   const merged = new Map()
   for (const example of list(existing)) {
     merged.set(key(example), example)
   }
   for (const session of sessions) {
-    const example = { session: session.id, excerpt: excerptFor(session.diary, note.body) }
+    const tool = (calls.get(session.id) || [ ]).find((call) => matchesText(note, `${call.command} ${call.output || ""}`))
+    const excerpt = tool
+      ? `${tool.command}: ${errorLine(tool.output)}`.slice(0, 200)
+      : excerptFor(session.diary, note.body)
+    const example = { session: session.id, excerpt }
     merged.set(key(example), example)
   }
   return Array.from(merged.values()).slice(0, 8)
+}
+
+function errorLine(output) {
+  const lines = String(output || "").split("\n").map((line) => line.trim()).filter(Boolean)
+  return lines.find((line) => /error|failed|cannot|not found|exception|stale|denied/i.test(line)) || lines[0] || ""
 }
 
 function key(example) {
@@ -97,10 +117,15 @@ function excerptFor(diary, body) {
   return line.trim().slice(0, 160)
 }
 
-function bestCommand(note, sessions) {
+function bestCommand(note, sessions, calls) {
   const wanted = new Set(significant(note.body))
   let best = null
   for (const session of sessions) {
+    for (const call of calls.get(session.id) || [ ]) {
+      if (!looksLikeCommand(call.command)) continue
+      const score = significant(`${call.command} ${call.output || ""}`).filter((token) => wanted.has(token)).length
+      if (!best || score > best.score) best = { command: call.command, score }
+    }
     const diary = String(session.diary || "")
     for (const match of diary.matchAll(/`([^`]+)`/g)) {
       const command = match[1].trim()

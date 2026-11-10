@@ -168,7 +168,9 @@ test("a note seen in two projects is promoted to global", () => {
   remember(db, { projectId: alpha.id, body })
   remember(db, { projectId: beta.id, body })
 
-  const result = promote(db)
+  const staged = promote(db)
+  assert.equal(staged.staged, 1)
+  const result = apply(db, staged.runId)
   assert.equal(result.promoted, 1)
   const global = db.prepare("SELECT * FROM notes WHERE scope = 'global' AND retired_at IS NULL").all()
   assert.equal(global.length, 1)
@@ -558,7 +560,8 @@ test("promotion keeps the project-scoped version in note_revisions", () => {
   remember(db, { projectId: alpha.id, body, provenance: "a1" })
   remember(db, { projectId: beta.id, body, provenance: "b1" })
 
-  promote(db)
+  const staged = promote(db)
+  apply(db, staged.runId)
 
   const global = db.prepare("SELECT * FROM notes WHERE scope = 'global'").get()
   const revision = db.prepare("SELECT * FROM note_revisions WHERE note_id = ?").get(global.id)
@@ -926,7 +929,7 @@ test("organize moves a claim to the subject a future agent will search", () => {
     body: "deploy needs redis running"
   })
 
-  const result = organize(db, { projectId: alpha.id })
+  const result = organize(db, { projectId: alpha.id, projection: true })
 
   assert.equal(result.moved, 1)
   assert.equal(db.prepare("SELECT topic FROM notes WHERE id = ?").get(loose.id).topic, "deploy")
@@ -944,8 +947,10 @@ test("organize merges topics that converged", () => {
     kind: "gotcha",
     body: "deploys need a health check"
   })
+  assert.equal(db.prepare("SELECT topic FROM notes WHERE id = ?").get(plural.id).topic, "deploy")
+  db.prepare("UPDATE notes SET topic = 'deploys' WHERE id = ?").run(plural.id)
 
-  const result = organize(db, { projectId: alpha.id })
+  const result = organize(db, { projectId: alpha.id, projection: true })
 
   assert.equal(result.merged, 1)
   assert.equal(db.prepare("SELECT topic FROM notes WHERE id = ?").get(plural.id).topic, "deploy")
@@ -970,7 +975,7 @@ test("organize splits an unwieldy topic by kind", () => {
     })
   }
 
-  const result = organize(db, { projectId: alpha.id, splitAt: 3 })
+  const result = organize(db, { projectId: alpha.id, splitAt: 3, projection: true })
 
   assert.equal(result.split, 1)
   const topics = db.prepare("SELECT topic, COUNT(*) AS n FROM notes GROUP BY topic ORDER BY topic").all()
@@ -984,7 +989,7 @@ test("organize cross-links related topic files", () => {
   recordNote(db, alpha, { projectId: alpha.id, topic: "deploy", kind: "fact", body: "redis listens on 6379" })
   recordNote(db, alpha, { projectId: alpha.id, topic: "flaky-tests", kind: "gotcha", body: "redis goes flaky under load" })
 
-  organize(db, { projectId: alpha.id })
+  organize(db, { projectId: alpha.id, projection: true })
 
   const deploy = fs.readFileSync(topicFile(alpha, "deploy"), "utf8")
   assert.match(deploy, /## Related/)
@@ -1003,7 +1008,7 @@ test("enrich adds prevalence, a repro command, and the session that showed it", 
     provenance: "s1"
   })
 
-  const result = enrich(db, { projectId: alpha.id, since: "2026-11-09T00:00:00.000Z" })
+  const result = enrich(db, { projectId: alpha.id, since: "2026-11-09T00:00:00.000Z", projection: true })
 
   assert.equal(result.enriched, 1)
   const stored = db.prepare("SELECT * FROM notes WHERE id = ?").get(note.id)

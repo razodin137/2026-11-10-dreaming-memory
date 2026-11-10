@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 430" role="img" aria-labelledby="decay-title decay-desc"><style>
+  .zone { fill: none; stroke: #bdb3a3; stroke-dasharray: 5 6; }
+  .zone-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 10px; letter-spacing: 1.6px; fill: #b3482a; }
+  .zone-sub { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #968d7d; }
+  .box { fill: #f7f3ea; stroke: #c3b8a6; }
+  .box-dark { fill: #1c1915; }
+  .box-sage { fill: #cbd4c2; stroke: #aebba4; }
+  .box-lilac { fill: #cfc7e0; stroke: #b8aecb; }
+  .box-rust { fill: #b3482a; }
+  .box-soft { fill: #eee7da; stroke: #d0c5b3; }
+  .node-title { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; font-weight: 600; fill: #191611; }
+  .node-sub { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 11px; fill: #6f675a; }
+  .node-mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; fill: #6f675a; }
+  .store-title { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; fill: #f8f4eb; }
+  .store-meta { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #9d9280; }
+  .store-row { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 11.5px; fill: #191611; }
+  .store-num { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 10px; fill: #6f675a; }
+  .wire { fill: none; stroke: #8f8472; stroke-width: 1.15; }
+  .wire-soft { fill: none; stroke: #b3a895; stroke-width: 1; stroke-dasharray: 4 5; }
+  .wire-rust { fill: none; stroke: #b3482a; stroke-width: 1.4; }
+  .wire-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #6f675a; letter-spacing: .5px; }
+  .chip { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #191611; }
+  .chip-light { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #f8f4eb; }
+  .chart-sub { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #6f675a; }
+  .chart-label { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 12px; font-weight: 600; fill: #191611; }
+  .chart-value { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; fill: #191611; }
+  .axis-line { stroke: #c7bcaa; stroke-width: 1; }
+  .grid-line { stroke: #e2dacb; stroke-width: 1; }
+  .axis-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 9px; fill: #968d7d; }
+  .retire-band { fill: #f0e3dc; }
+  .retire-line { stroke: #b3482a; stroke-width: 1; stroke-dasharray: 4 4; }
+  .retire-label { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8.5px; fill: #b3482a; }
+  .curve { fill: none; stroke-width: 2; }
+  .curve-1 { stroke: #b3482a; }
+  .curve-2 { stroke: #6e7d66; }
+  .curve-3 { stroke: #70658c; }
+  .curve-dot { fill: #f8f4eb; stroke-width: 2; }
+  .bar-score { fill: #b3482a; }
+  .conf-dot { fill: #f8f4eb; stroke: #191611; stroke-width: 1.3; }
+  .conf-stem { stroke: #191611; stroke-width: 1; stroke-dasharray: 2 3; }
+</style>
+<rect x="0" y="0" width="780" height="430" fill="#f8f4eb"/>
+            <title id="decay-title">Confidence decay over 200 days</title>
+            <desc id="decay-desc">Three notes starting at confidence 0.92, 0.74, and 0.66 decline by half every 45 days. A dashed red threshold at 0.05 marks retirement, reached between 167 and 189 days.</desc>
+
+            <rect class="retire-band" x="70" y="354" width="660" height="16"></rect>
+            <line class="grid-line" x1="70" y1="50" x2="730" y2="50"></line>
+            <line class="grid-line" x1="70" y1="130" x2="730" y2="130"></line>
+            <line class="grid-line" x1="70" y1="210" x2="730" y2="210"></line>
+            <line class="grid-line" x1="70" y1="290" x2="730" y2="290"></line>
+            <line class="axis-line" x1="70" y1="370" x2="730" y2="370"></line>
+            <line class="axis-line" x1="70" y1="50" x2="70" y2="370"></line>
+
+            <text class="axis-label" x="62" y="54" text-anchor="end">1.00</text>
+            <text class="axis-label" x="62" y="134" text-anchor="end">0.75</text>
+            <text class="axis-label" x="62" y="214" text-anchor="end">0.50</text>
+            <text class="axis-label" x="62" y="294" text-anchor="end">0.25</text>
+            <text class="axis-label" x="62" y="374" text-anchor="end">0.00</text>
+
+            <text class="axis-label" x="70" y="394">0</text>
+            <text class="axis-label" x="202" y="394">40</text>
+            <text class="axis-label" x="334" y="394">80</text>
+            <text class="axis-label" x="466" y="394">120</text>
+            <text class="axis-label" x="598" y="394">160</text>
+            <text class="axis-label" x="730" y="394" text-anchor="end">200 days</text>
+
+            <line class="retire-line" x1="70" y1="354" x2="730" y2="354"></line>
+            <text class="retire-label" x="726" y="348" text-anchor="end">retired below 0.05</text>
+
+            <path class="curve curve-1" d="M70 76 L136 153 L202 211 L268 253 L334 284 L400 307 L466 323 L532 336 L598 345 L664 351 L730 356"></path>
+            <path class="curve curve-2" d="M70 133 L136 196 L202 242 L268 276 L334 301 L400 319 L466 333 L532 343 L598 350 L664 355 L730 359"></path>
+            <path class="curve curve-3" d="M70 159 L136 215 L202 256 L268 286 L334 308 L400 325 L466 337 L532 345 L598 352 L664 357 L730 360"></path>
+
+            <circle class="curve-dot curve-1" cx="70" cy="76" r="3.5"></circle>
+            <circle class="curve-dot curve-2" cx="70" cy="133" r="3.5"></circle>
+            <circle class="curve-dot curve-3" cx="70" cy="159" r="3.5"></circle>
+
+            <line x1="70" y1="56" x2="96" y2="56" stroke="#b3482a" stroke-width="2"></line>
+            <text class="chart-value" x="104" y="60">0.92</text>
+            <line x1="150" y1="56" x2="176" y2="56" stroke="#6e7d66" stroke-width="2"></line>
+            <text class="chart-value" x="184" y="60">0.74</text>
+            <line x1="230" y1="56" x2="256" y2="56" stroke="#70658c" stroke-width="2"></line>
+            <text class="chart-value" x="264" y="60">0.66</text>
+
+            <text class="chart-sub" x="70" y="34">confidence</text>
+            <text class="chart-sub" x="730" y="414" text-anchor="end">days since updated_at</text>
+          </svg>

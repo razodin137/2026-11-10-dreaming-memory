@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS notes (
   fingerprint TEXT NOT NULL,
   confidence REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
   hits INTEGER NOT NULL DEFAULT 0,
+  use_count INTEGER NOT NULL DEFAULT 0,
   provenance TEXT NOT NULL,
   repro TEXT,
   examples TEXT,
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS notes (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   last_hit_at TEXT,
+  last_used_at TEXT,
   verified_at TEXT,
   verify_result TEXT,
   enriched_at TEXT,
@@ -42,6 +44,8 @@ CREATE INDEX IF NOT EXISTS notes_live ON notes (scope, project_id, retired_at);
 CREATE TABLE IF NOT EXISTS note_hits (
   note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
   project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'retrieval' CHECK (kind IN ('retrieval', 'use')),
+  weight REAL NOT NULL DEFAULT 0.2,
   hit_at TEXT NOT NULL
 );
 
@@ -55,6 +59,38 @@ CREATE TABLE IF NOT EXISTS sessions (
   diary TEXT,
   distilled_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+  topic TEXT NOT NULL DEFAULT 'general',
+  kind TEXT NOT NULL DEFAULT 'fact' CHECK (kind IN ('fact', 'gotcha', 'convention', 'decision')),
+  body TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
+  provenance TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (session_id, fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS drafts_session ON drafts (session_id, project_id);
+
+CREATE TABLE IF NOT EXISTS tool_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  command TEXT NOT NULL,
+  output TEXT,
+  exit_code INTEGER,
+  ok INTEGER NOT NULL DEFAULT 1,
+  error_signature TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS tool_calls_session ON tool_calls (session_id, id);
+CREATE INDEX IF NOT EXISTS tool_calls_project ON tool_calls (project_id, created_at);
 
 CREATE TABLE IF NOT EXISTS dream_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,6 +124,7 @@ CREATE TABLE IF NOT EXISTS staged (
   reason TEXT,
   examples TEXT,
   prevalence TEXT,
+  replaces TEXT,
   session_id TEXT,
   applied_at TEXT
 );
