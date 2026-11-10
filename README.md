@@ -10,6 +10,7 @@ mem.db
 ├── note_hits     who recalled what, when — drives decay and promotion
 ├── sessions      one row per agent session, carrying its diary
 ├── staged        dream output, applied deterministically
+├── note_revisions  the previous version of every note that changed
 └── dream_runs    an audit log of every night
 ```
 
@@ -40,6 +41,10 @@ global only once the same claim has been hit in two different projects.
 **Writes are staged, then applied.** The dream step emits candidates; `apply` executes them
 as deterministic `insert | merge | update | retire` operations, deduped by a normalized
 fingerprint. A bad night is one transaction away from being reverted.
+
+**Every changed note leaves its previous self behind.** Before an update or promotion
+changes a note's body or scope, the old row is copied into `note_revisions` with the dream
+run that caused it. `mem revisions --note 42` shows what a note said before each change.
 
 ## The nightly cycle
 

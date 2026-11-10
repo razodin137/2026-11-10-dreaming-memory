@@ -200,6 +200,61 @@ test("dream stages then applies candidates deterministically", () => {
   assert.equal(result.problems.length, 1)
 })
 
+test("applying an update keeps the previous note in note_revisions", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  const { id } = remember(db, {
+    projectId: alpha.id,
+    kind: "gotcha",
+    body: "redis listens on 6379",
+    provenance: "s1"
+  })
+  const staged = stage(db, {
+    since: null,
+    candidates: [
+      { op: "update", target_id: id, body: "redis listens on 6380", confidence: 0.9, provenance: "s2" }
+    ]
+  })
+
+  const result = apply(db, staged.runId)
+
+  assert.equal(result.updated, 1)
+  assert.equal(db.prepare("SELECT body FROM notes WHERE id = ?").get(id).body, "redis listens on 6380")
+  const revision = db.prepare("SELECT * FROM note_revisions WHERE note_id = ?").get(id)
+  assert.equal(revision.body, "redis listens on 6379")
+  assert.equal(revision.kind, "gotcha")
+  assert.equal(revision.scope, "project")
+  assert.equal(revision.version, 1)
+  assert.equal(revision.run_id, staged.runId)
+  assert.equal(revision.cause, "update")
+})
+
+test("a confidence-only merge leaves no revision", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  remember(db, { projectId: alpha.id, body: "redis listens on 6379", provenance: "s1" })
+  remember(db, { projectId: alpha.id, body: "redis listens on 6379", provenance: "s2" })
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_revisions").get().n, 0)
+})
+
+test("promotion keeps the project-scoped version in note_revisions", () => {
+  const db = fresh()
+  const alpha = project(db, "alpha")
+  const beta = project(db, "beta")
+  const body = "eslint 10 requires node 20.19 or newer"
+  remember(db, { projectId: alpha.id, body, provenance: "a1" })
+  remember(db, { projectId: beta.id, body, provenance: "b1" })
+
+  promote(db)
+
+  const global = db.prepare("SELECT * FROM notes WHERE scope = 'global'").get()
+  const revision = db.prepare("SELECT * FROM note_revisions WHERE note_id = ?").get(global.id)
+  assert.equal(revision.scope, "project")
+  assert.equal(revision.body, body)
+  assert.equal(revision.cause, "promote")
+  assert.equal(global.version, revision.version + 1)
+})
+
 test("materialize writes a read-only projection", () => {
   const db = fresh()
   const alpha = project(db, "alpha")

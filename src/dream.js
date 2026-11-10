@@ -1,5 +1,5 @@
 import { fingerprint, now, transaction } from "./db.js"
-import { KINDS, SCOPES, remember } from "./notes.js"
+import { KINDS, SCOPES, recordRevision, remember } from "./notes.js"
 import { bySlug } from "./projects.js"
 import { undistilled } from "./sessions.js"
 
@@ -102,7 +102,7 @@ export function apply(db, runId) {
     const finish = db.prepare("UPDATE staged SET applied_at = ? WHERE id = ?")
     for (const row of rows) {
       try {
-        applyOne(db, row, counts)
+        applyOne(db, row, counts, runId)
         finish.run(now(), row.id)
       } catch (error) {
         problems.push({ staged_id: row.id, error: error.message })
@@ -117,7 +117,7 @@ export function apply(db, runId) {
   return { runId, ...counts, problems }
 }
 
-function applyOne(db, row, counts) {
+function applyOne(db, row, counts, runId) {
   const project = row.project_slug ? bySlug(db, row.project_slug) : null
   if (row.op === "insert" || row.op === "merge") {
     const result = remember(db, {
@@ -134,11 +134,14 @@ function applyOne(db, row, counts) {
   }
   if (row.op === "update") {
     if (!row.target_id) throw new Error("update requires target_id")
-    const result = db.prepare(`
+    const existing = db.prepare("SELECT * FROM notes WHERE id = ?").get(row.target_id)
+    if (!existing) throw new Error(`update target ${row.target_id} not found`)
+    const body = row.body.trim()
+    if (existing.body !== body) recordRevision(db, existing, { runId, cause: "update" })
+    db.prepare(`
       UPDATE notes SET body = ?, fingerprint = ?, confidence = ?, updated_at = ?, version = version + 1
       WHERE id = ?
-    `).run(row.body, fingerprint(row.body), row.confidence, now(), row.target_id)
-    if (Number(result.changes) === 0) throw new Error(`update target ${row.target_id} not found`)
+    `).run(body, fingerprint(body), row.confidence, now(), row.target_id)
     counts.updated += 1
     return
   }

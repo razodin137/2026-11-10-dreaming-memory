@@ -71,6 +71,52 @@ function insertNote(db, note, scope, kind, print, confidence, stamp) {
   return { id: Number(result.lastInsertRowid), created: true }
 }
 
+export function recordRevision(db, note, { runId = null, sessionId = null, cause = "update", at = now() } = {}) {
+  db.prepare(`
+    INSERT INTO note_revisions (
+      note_id, version, project_id, scope, kind, body, fingerprint, confidence,
+      provenance, retired_at, run_id, session_id, cause, updated_at, recorded_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    note.id,
+    note.version,
+    note.project_id ?? null,
+    note.scope,
+    note.kind,
+    note.body,
+    note.fingerprint,
+    note.confidence,
+    note.provenance || "",
+    note.retired_at ?? null,
+    runId,
+    sessionId,
+    cause,
+    note.updated_at,
+    at
+  )
+}
+
+export function revisions(db, { noteId = null, runId = null, limit = 50 } = {}) {
+  const clauses = [ ]
+  const params = [ ]
+  if (noteId !== null) {
+    clauses.push("note_id = ?")
+    params.push(noteId)
+  }
+  if (runId !== null) {
+    clauses.push("run_id = ?")
+    params.push(runId)
+  }
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : ""
+  params.push(limit)
+  return db.prepare(`
+    SELECT * FROM note_revisions ${where}
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(...params)
+}
+
 export function recall(db, { projectId = null, limit = 12, query = null, recordHits = true } = {}) {
   const rows = query ? search(db, projectId, query) : candidates(db, projectId)
   const stamp = now()
@@ -173,14 +219,16 @@ export function promote(db) {
       const existing = db.prepare(
         "SELECT * FROM notes WHERE scope = 'global' AND kind = ? AND fingerprint = ? AND retired_at IS NULL"
       ).get(group.kind, group.fingerprint)
+      const source = copies.reduce((best, copy) => (copy.confidence > best.confidence ? copy : best), copies[0])
+      const priorVersion = Math.max(...copies.map((copy) => copy.version))
 
       if (existing) {
-        db.prepare("UPDATE notes SET confidence = ?, hits = MAX(hits, ?), updated_at = ? WHERE id = ?")
+        db.prepare("UPDATE notes SET confidence = ?, hits = MAX(hits, ?), updated_at = ?, version = version + 1 WHERE id = ?")
           .run(clamp(group.confidence + 0.1), Number(group.hits || 0), now(), existing.id)
       } else {
-        db.prepare(`
-          INSERT INTO notes (project_id, scope, kind, body, fingerprint, confidence, hits, provenance, created_at, updated_at)
-          VALUES (NULL, 'global', ?, ?, ?, ?, ?, ?, ?, ?)
+        const result = db.prepare(`
+          INSERT INTO notes (project_id, scope, kind, body, fingerprint, confidence, hits, provenance, version, created_at, updated_at)
+          VALUES (NULL, 'global', ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           group.kind,
           body,
@@ -188,9 +236,13 @@ export function promote(db) {
           clamp(group.confidence + 0.1),
           Number(group.hits || 0),
           copies.map((copy) => copy.provenance).filter(Boolean).join(" | "),
+          priorVersion + 1,
           now(),
           now()
         )
+        recordRevision(db, { ...source, id: Number(result.lastInsertRowid), version: priorVersion }, {
+          cause: "promote"
+        })
       }
 
       const stamp = now()
@@ -212,7 +264,8 @@ export function stats(db) {
   const retired = db.prepare("SELECT COUNT(*) AS n FROM notes WHERE retired_at IS NOT NULL").get().n
   const projects = db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status = 'active'").get().n
   const sessions = db.prepare("SELECT COUNT(*) AS n FROM sessions").get().n
-  return { live, global, retired, projects, sessions }
+  const revisions_ = db.prepare("SELECT COUNT(*) AS n FROM note_revisions").get().n
+  return { live, global, retired, projects, sessions, revisions: revisions_ }
 }
 
 function mergeProvenance(existing, incoming) {

@@ -77,6 +77,28 @@ CREATE TABLE IF NOT EXISTS staged (
 
 CREATE INDEX IF NOT EXISTS staged_run ON staged (run_id, applied_at);
 
+CREATE TABLE IF NOT EXISTS note_revisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('project', 'global')),
+  kind TEXT NOT NULL CHECK (kind IN ('fact', 'gotcha', 'convention', 'decision')),
+  body TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  provenance TEXT NOT NULL,
+  retired_at TEXT,
+  run_id INTEGER REFERENCES dream_runs(id) ON DELETE SET NULL,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  cause TEXT NOT NULL CHECK (cause IN ('update', 'promote', 'revert')),
+  updated_at TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS note_revisions_note ON note_revisions (note_id, id DESC);
+CREATE INDEX IF NOT EXISTS note_revisions_run ON note_revisions (run_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(body, content = 'notes', content_rowid = 'id');
 
 CREATE TRIGGER IF NOT EXISTS notes_fts_ai AFTER INSERT ON notes BEGIN

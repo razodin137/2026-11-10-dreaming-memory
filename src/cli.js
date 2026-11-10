@@ -3,7 +3,7 @@ import path from "node:path"
 import { DEFAULT_DB, init } from "./db.js"
 import { packet, stage, apply } from "./dream.js"
 import { materialize } from "./materialize.js"
-import { KINDS, SCOPES, decay, promote, recall, remember, stats } from "./notes.js"
+import { KINDS, SCOPES, decay, promote, recall, remember, revisions, stats } from "./notes.js"
 import { archiveStale, byPath, list, register } from "./projects.js"
 import { end, start, writeDiary } from "./sessions.js"
 
@@ -110,6 +110,14 @@ export function run(argv) {
     case "stats":
       return print(stats(db))
 
+    case "revisions": {
+      return print(revisions(db, {
+        noteId: flags.note === undefined ? null : Number(flags.note),
+        runId: flags.run === undefined ? null : Number(flags.run),
+        limit: flags.limit ? Number(flags.limit) : 50
+      }))
+    }
+
     case "kinds":
       return print({ kinds: KINDS, scopes: SCOPES })
 
@@ -174,6 +182,7 @@ function usage() {
     "mem remember --body TEXT [--kind gotcha] [--scope project] [--confidence 0.6]",
     "mem recall [--query TEXT] [--limit 12]",
     "mem dream --packet | --apply FILE | --auto",
+    "mem revisions [--note ID] [--run RUN] [--limit 50]",
     "mem promote | decay | materialize | stats"
   ].join("\n")
 }
